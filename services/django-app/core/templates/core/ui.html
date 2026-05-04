@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AZTDP - Django Control</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #070b10;
+        --bg-2: #0b121b;
+        --panel: rgba(10, 16, 24, 0.82);
+        --panel-strong: rgba(11, 18, 28, 0.9);
+        --accent: #9bff00;
+        --accent-2: #00e6a8;
+        --cyan: #3ed1ff;
+        --amber: #f5b800;
+        --red: #ff3b57;
+        --green: #00f29b;
+        --muted: #6b7a90;
+        --text: #e6eef8;
+        --border: rgba(155, 255, 0, 0.2);
+        --radius-sm: 6px;
+        --radius-md: 10px;
+        --radius-lg: 16px;
+        --shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+        --mono: 'IBM Plex Mono', monospace;
+        --sans: 'Rajdhani', sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: var(--sans);
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+        font-size: 14px;
+        line-height: 1.5;
+        background-image:
+          radial-gradient(circle at 20% 0%, rgba(155, 255, 0, 0.12), transparent 35%),
+          radial-gradient(circle at 80% 20%, rgba(62, 209, 255, 0.08), transparent 40%),
+          linear-gradient(135deg, rgba(16, 24, 36, 0.9), rgba(6, 9, 14, 0.9));
+      }
+
+      body::before {
+        content: '';
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background-image:
+          repeating-linear-gradient(90deg, rgba(155, 255, 0, 0.05) 0 1px, transparent 1px 140px),
+          repeating-linear-gradient(180deg, rgba(155, 255, 0, 0.05) 0 1px, transparent 1px 140px);
+        opacity: 0.25;
+      }
+
+      .app {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        height: 64px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 24px;
+        background: rgba(5, 9, 14, 0.9);
+        border-bottom: 1px solid var(--border);
+        backdrop-filter: blur(18px);
+        z-index: 10;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .brand-icon {
+        width: 34px;
+        height: 34px;
+        border-radius: 10px;
+        background: linear-gradient(135deg, #9bff00, #00e6a8);
+        box-shadow: 0 0 20px rgba(155, 255, 0, 0.35);
+      }
+
+      .brand-title {
+        font-size: 1rem;
+        letter-spacing: 0.16em;
+        font-weight: 700;
+        color: var(--accent);
+      }
+
+      .brand-sub {
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        letter-spacing: 0.2em;
+        color: var(--muted);
+      }
+
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--muted);
+      }
+
+      .status-dot.ready {
+        background: var(--accent);
+        box-shadow: 0 0 8px rgba(155, 255, 0, 0.7);
+      }
+
+      main {
+        max-width: 1400px;
+        width: 100%;
+        margin: 0 auto;
+        padding: 32px 24px 48px;
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 20px;
+      }
+
+      .stack {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow);
+        padding: 18px;
+        backdrop-filter: blur(10px);
+      }
+
+      .card h2 {
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.18em;
+        color: var(--accent);
+        margin-bottom: 10px;
+      }
+
+      .card p {
+        color: var(--muted);
+        font-size: 0.75rem;
+        margin-bottom: 12px;
+      }
+
+      label {
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        display: block;
+        margin-bottom: 6px;
+      }
+
+      input,
+      textarea,
+      select {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border);
+        background: var(--bg-2);
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 0.78rem;
+      }
+
+      textarea {
+        min-height: 90px;
+        resize: vertical;
+      }
+
+      .btn-row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 10px;
+      }
+
+      .btn {
+        padding: 8px 14px;
+        border-radius: var(--radius-sm);
+        border: 1px solid rgba(155, 255, 0, 0.35);
+        background: rgba(155, 255, 0, 0.12);
+        color: var(--accent);
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        cursor: pointer;
+      }
+
+      .btn.secondary {
+        border-color: rgba(62, 209, 255, 0.4);
+        color: var(--cyan);
+        background: rgba(62, 209, 255, 0.12);
+      }
+
+      .btn.warn {
+        border-color: rgba(245, 184, 0, 0.4);
+        color: var(--amber);
+        background: rgba(245, 184, 0, 0.12);
+      }
+
+      .btn.danger {
+        border-color: rgba(255, 59, 87, 0.4);
+        color: var(--red);
+        background: rgba(255, 59, 87, 0.12);
+      }
+
+      .response {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .response pre {
+        flex: 1;
+        background: rgba(0, 0, 0, 0.55);
+        border-radius: var(--radius-md);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        padding: 14px;
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        color: var(--text);
+        overflow: auto;
+      }
+
+      .snapshot {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+      }
+
+      .snapshot .field {
+        background: rgba(10, 18, 28, 0.6);
+        border: 1px solid rgba(155, 255, 0, 0.18);
+        border-radius: var(--radius-md);
+        padding: 12px;
+      }
+
+      .field .value {
+        margin-top: 6px;
+        font-family: var(--mono);
+        font-size: 0.82rem;
+      }
+
+      .field .value.accent {
+        color: var(--accent);
+      }
+
+      .field .value.warn {
+        color: var(--amber);
+      }
+
+      .field .value.danger {
+        color: var(--red);
+      }
+
+      .field .value.ok {
+        color: var(--green);
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      @media (max-width: 1080px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-icon"></div>
+          <div>
+            <div class="brand-title">AZTDP</div>
+            <div class="brand-sub">Django Control</div>
+          </div>
+        </div>
+        <div class="status">
+          <span class="status-dot" id="token-dot"></span>
+          <span id="token-status">Token not set</span>
+          <span id="clock"></span>
+        </div>
+      </header>
+
+      <main>
+        <div class="stack">
+          <section class="card">
+            <h2>Access Token</h2>
+            <p>Paste a Bearer token to authorize requests against protected endpoints.</p>
+            <label for="token">Bearer token</label>
+            <textarea id="token" placeholder="eyJhbGciOi..."></textarea>
+            <div class="btn-row">
+              <button class="btn" id="save-token">Save token</button>
+              <button class="btn secondary" id="clear-token">Clear</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>Payment Lookup</h2>
+            <label for="payment-id">Payment ID</label>
+            <input id="payment-id" placeholder="pay_1234" />
+            <div class="btn-row">
+              <button class="btn" id="fetch-payment">Fetch payment</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>Admin Flags</h2>
+            <p>Requires an authenticated token to evaluate the policy decision.</p>
+            <div class="btn-row">
+              <button class="btn warn" id="fetch-flags">Fetch flags</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>Step-Up Verify</h2>
+            <p>Submit a challenge response to obtain a step-up token.</p>
+            <label for="challenge-id">Challenge ID</label>
+            <input id="challenge-id" placeholder="uuid" />
+            <label for="otp">OTP code</label>
+            <input id="otp" placeholder="123456" />
+            <label for="user-id">User ID</label>
+            <input id="user-id" placeholder="user-1" />
+            <div class="btn-row">
+              <button class="btn danger" id="verify-stepup">Verify</button>
+            </div>
+          </section>
+        </div>
+
+        <div class="stack">
+          <section class="card response">
+            <h2>Response Console</h2>
+            <div class="snapshot">
+              <div class="field">
+                <label>Subject</label>
+                <div class="value accent" id="snap-subject">--</div>
+              </div>
+              <div class="field">
+                <label>Decision</label>
+                <div class="value" id="snap-decision">--</div>
+              </div>
+              <div class="field">
+                <label>Risk Score</label>
+                <div class="value" id="snap-risk">--</div>
+              </div>
+              <div class="field">
+                <label>Anomaly Score</label>
+                <div class="value" id="snap-anomaly">--</div>
+              </div>
+            </div>
+            <pre id="response">Ready.</pre>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      const tokenEl = document.getElementById('token');
+      const tokenDot = document.getElementById('token-dot');
+      const tokenStatus = document.getElementById('token-status');
+      const clock = document.getElementById('clock');
+      const responseEl = document.getElementById('response');
+
+      const snapSubject = document.getElementById('snap-subject');
+      const snapDecision = document.getElementById('snap-decision');
+      const snapRisk = document.getElementById('snap-risk');
+      const snapAnomaly = document.getElementById('snap-anomaly');
+
+      const updateClock = () => {
+        clock.textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
+      };
+
+      updateClock();
+      setInterval(updateClock, 1000);
+
+      const getToken = () => localStorage.getItem('aztdp_token') || '';
+
+      const setToken = (val) => {
+        if (val) {
+          localStorage.setItem('aztdp_token', val);
+        } else {
+          localStorage.removeItem('aztdp_token');
+        }
+        tokenEl.value = val;
+        renderTokenState();
+      };
+
+      const renderTokenState = () => {
+        const token = getToken();
+        if (token) {
+          tokenDot.classList.add('ready');
+          tokenStatus.textContent = 'Token ready';
+        } else {
+          tokenDot.classList.remove('ready');
+          tokenStatus.textContent = 'Token not set';
+        }
+      };
+
+      const renderResponse = (data) => {
+        responseEl.textContent = JSON.stringify(data, null, 2);
+      };
+
+      const renderSnapshot = (data) => {
+        const subject = data?.subject || data?.decision?.user_id || data?.user_id || '--';
+        const decision = data?.decision?.decision || data?.decision || data?.result?.decision || '--';
+        const risk = data?.risk?.risk_score ?? data?.decision?.risk_score ?? data?.risk_score;
+        const anomaly = data?.risk?.anomaly_score ?? data?.decision?.anomaly_score ?? data?.anomaly_score;
+
+        snapSubject.textContent = subject || '--';
+        snapDecision.textContent = decision || '--';
+        snapDecision.className = 'value ' + (decision === 'deny' ? 'danger' : decision === 'stepup' ? 'warn' : 'ok');
+
+        if (risk == null) {
+          snapRisk.textContent = '--';
+          snapRisk.className = 'value';
+        } else {
+          const riskVal = Number(risk).toFixed(3);
+          snapRisk.textContent = riskVal;
+          snapRisk.className = 'value ' + (risk >= 0.7 ? 'danger' : risk >= 0.4 ? 'warn' : 'ok');
+        }
+
+        if (anomaly == null) {
+          snapAnomaly.textContent = '--';
+          snapAnomaly.className = 'value';
+        } else {
+          const anmVal = Number(anomaly).toFixed(3);
+          snapAnomaly.textContent = anmVal;
+          snapAnomaly.className = 'value ' + (anomaly >= 0.7 ? 'danger' : anomaly >= 0.4 ? 'warn' : 'ok');
+        }
+      };
+
+      const apiRequest = async (url, options = {}) => {
+        const token = getToken();
+        const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+        if (token) {
+          headers.Authorization = `Bearer ${token}`;
+        }
+        const response = await fetch(url, { cache: 'no-store', ...options, headers });
+        const text = await response.text();
+        let data = {};
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch (_) {
+          data = { raw: text };
+        }
+        if (!response.ok) {
+          throw { status: response.status, data };
+        }
+        return data;
+      };
+
+      document.getElementById('save-token').addEventListener('click', () => {
+        const val = tokenEl.value.trim();
+        setToken(val);
+      });
+
+      document.getElementById('clear-token').addEventListener('click', () => {
+        setToken('');
+      });
+
+      document.getElementById('fetch-payment').addEventListener('click', async () => {
+        const paymentId = document.getElementById('payment-id').value.trim();
+        if (!paymentId) return;
+        try {
+          const data = await apiRequest(`/v1/payments/${paymentId}`);
+          renderResponse(data);
+          renderSnapshot(data);
+        } catch (err) {
+          renderResponse({ error: err.data || err });
+        }
+      });
+
+      document.getElementById('fetch-flags').addEventListener('click', async () => {
+        try {
+          const data = await apiRequest('/v1/admin/flags');
+          renderResponse(data);
+          renderSnapshot(data);
+        } catch (err) {
+          renderResponse({ error: err.data || err });
+        }
+      });
+
+      document.getElementById('verify-stepup').addEventListener('click', async () => {
+        const payload = {
+          challenge_id: document.getElementById('challenge-id').value.trim(),
+          code: document.getElementById('otp').value.trim(),
+          user_id: document.getElementById('user-id').value.trim(),
+        };
+        try {
+          const data = await apiRequest('/v1/auth/step-up/verify', {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          });
+          renderResponse(data);
+          renderSnapshot(data);
+        } catch (err) {
+          renderResponse({ error: err.data || err });
+        }
+      });
+
+      setToken(getToken());
+    </script>
+  </body>
+</html>

@@ -1,6 +1,7 @@
 import json
 
 from django.http import HttpResponse, JsonResponse
+from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -34,6 +35,10 @@ def admin_flags(request):
             "risk": context.get("risk"),
         }
     )
+
+
+def ui_home(request):
+    return render(request, "core/ui.html")
 
 
 @csrf_exempt

@@ -1,0 +1,152 @@
+@import "@fontsource/space-grotesk/600.css";
+@import "@fontsource/space-grotesk/700.css";
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Carbon base */
+    --background: 222 22% 6%;
+    --foreground: 210 30% 96%;
+
+    --surface: 222 18% 9%;
+    --surface-2: 222 16% 12%;
+
+    --card: 222 18% 9%;
+    --card-foreground: 210 30% 96%;
+
+    --popover: 222 18% 10%;
+    --popover-foreground: 210 30% 96%;
+
+    --primary: 78 90% 55%;
+    --primary-foreground: 222 30% 8%;
+
+    --secondary: 222 16% 14%;
+    --secondary-foreground: 210 30% 96%;
+
+    --muted: 222 16% 14%;
+    --muted-foreground: 215 15% 65%;
+
+    --accent: 178 55% 42%;
+    --accent-foreground: 222 30% 8%;
+
+    --destructive: 0 85% 60%;
+    --destructive-foreground: 210 30% 98%;
+
+    --border: 220 14% 18%;
+    --input: 220 14% 18%;
+    --ring: 78 90% 55%;
+    --grid-line: 220 14% 14%;
+
+    --radius: 0.625rem;
+
+    /* Severity */
+    --severity-critical: 0 85% 60%;
+    --severity-high: 14 90% 58%;
+    --severity-medium: 38 95% 55%;
+    --severity-low: 178 55% 42%;
+    --severity-info: 210 25% 60%;
+
+    /* Decision */
+    --decision-allow: 78 90% 55%;
+    --decision-stepup: 38 95% 55%;
+    --decision-deny: 0 85% 60%;
+
+    --gradient-ambient: radial-gradient(80% 60% at 10% 0%, hsl(178 55% 18% / 0.35), transparent 60%),
+      radial-gradient(60% 50% at 100% 100%, hsl(78 60% 14% / 0.28), transparent 60%),
+      linear-gradient(180deg, hsl(222 22% 5%), hsl(222 22% 7%));
+    --shadow-rail: 0 20px 60px -20px hsl(0 0% 0% / 0.6);
+    --shadow-card: 0 1px 0 hsl(220 14% 22% / 0.5) inset, 0 6px 30px -15px hsl(0 0% 0% / 0.6);
+
+    --sidebar-background: 222 20% 7%;
+    --sidebar-foreground: 210 30% 92%;
+    --sidebar-primary: 78 90% 55%;
+    --sidebar-primary-foreground: 222 30% 8%;
+    --sidebar-accent: 222 16% 12%;
+    --sidebar-accent-foreground: 210 30% 96%;
+    --sidebar-border: 220 14% 16%;
+    --sidebar-ring: 78 90% 55%;
+  }
+
+  .dark {
+    --background: 222 22% 6%;
+    --foreground: 210 30% 96%;
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, sans-serif;
+    background-image: var(--gradient-ambient);
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: 'Space Grotesk', sans-serif;
+    letter-spacing: -0.01em;
+  }
+
+  .font-mono, code, kbd, pre {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+  }
+}
+
+@layer utilities {
+  .bg-surface { background-color: hsl(var(--surface)); }
+  .bg-surface-2 { background-color: hsl(var(--surface-2)); }
+  .text-display { font-family: 'Space Grotesk', sans-serif; letter-spacing: -0.02em; }
+  .ambient-drift {
+    background: var(--gradient-ambient);
+    background-size: 140% 140%;
+    animation: ambient-drift 30s ease-in-out infinite alternate;
+  }
+  .grid-bg {
+    background-image:
+      linear-gradient(hsl(var(--grid-line)) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--grid-line)) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  .card-elev {
+    background: linear-gradient(180deg, hsl(var(--surface)), hsl(var(--surface-2)));
+    border: 1px solid hsl(var(--border));
+    box-shadow: var(--shadow-card);
+  }
+  .reveal {
+    animation: reveal-up 420ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  }
+  .alert-pulse {
+    animation: alert-pulse 1.6s ease-in-out infinite;
+  }
+}
+
+@keyframes ambient-drift {
+  0% { background-position: 0% 0%; }
+  100% { background-position: 100% 100%; }
+}
+@keyframes reveal-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes alert-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 hsl(var(--severity-critical) / 0.0); }
+  50% { box-shadow: 0 0 0 6px hsl(var(--severity-critical) / 0.18); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-drift, .alert-pulse, .reveal { animation: none !important; }
+}

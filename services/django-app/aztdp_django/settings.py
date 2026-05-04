@@ -77,7 +77,7 @@ AZTDP_ENDPOINT_SENSITIVITY = [
     {"method": "POST", "path_prefix": "/v1/admin", "sensitivity": 5},
 ]
 
-AZTDP_ALLOWLIST_PATHS = ["/health", "/metrics", "/v1/auth/step-up/verify"]
+AZTDP_ALLOWLIST_PATHS = ["/health", "/metrics", "/v1/auth/step-up/verify", "/ui"]
 
 # Trusted reverse-proxy CIDRs. Only requests originating from these networks
 # are allowed to set X-Client-Ip / X-Forwarded-For / X-Geo. Empty by default
