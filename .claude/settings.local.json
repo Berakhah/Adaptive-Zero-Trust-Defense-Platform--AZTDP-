@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install *)",
+      "Bash(pip show *)",
+      "Bash(python -m pytest services/gateway/tests services/risk-engine/tests -ra --no-header)",
+      "Bash(python -m pytest services/gateway/tests services/risk-engine/tests -q)",
+      "Bash(python -m pytest services/anomaly-service/tests -q)",
+      "Bash(python -m pytest services/django-app/tests -q)",
+      "Bash(grep -E \"\\\\.\\(py|yml|yaml|sql|txt|rego|json\\)$\")",
+      "WebFetch(domain:repo1.maven.org)",
+      "WebFetch(domain:search.maven.org)",
+      "WebFetch(domain:central.sonatype.com)",
+      "Bash(curl -sf \"https://repo1.maven.org/maven2/org/springframework/boot/spring-boot-starter-parent/maven-metadata.xml\")",
+      "Bash(command -v opa)",
+      "Bash(opa test *)"
+    ]
+  }
+}

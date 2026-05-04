@@ -1,0 +1,60 @@
+{
+  "title": "AZTDP — Policy Decisions",
+  "uid": "aztdp-policy",
+  "schemaVersion": 39,
+  "tags": ["aztdp"],
+  "timezone": "browser",
+  "time": {"from": "now-1h", "to": "now"},
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Decisions per second by outcome",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{
+        "expr": "sum by (decision) (rate(aztdp_policy_decisions_total[1m]))",
+        "legendFormat": "{{decision}}"
+      }]
+    },
+    {
+      "id": 2,
+      "title": "Total decisions (last 1h)",
+      "type": "stat",
+      "gridPos": {"x": 0, "y": 8, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "sum(increase(aztdp_policy_decisions_total[1h]))"}]
+    },
+    {
+      "id": 3,
+      "title": "Deny rate",
+      "type": "stat",
+      "gridPos": {"x": 6, "y": 8, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{
+        "expr": "sum(rate(aztdp_policy_decisions_total{decision=\"deny\"}[5m])) / sum(rate(aztdp_policy_decisions_total[5m]))"
+      }],
+      "fieldConfig": {"defaults": {"unit": "percentunit"}}
+    },
+    {
+      "id": 4,
+      "title": "Step-up rate",
+      "type": "stat",
+      "gridPos": {"x": 12, "y": 8, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{
+        "expr": "sum(rate(aztdp_policy_decisions_total{decision=\"stepup\"}[5m])) / sum(rate(aztdp_policy_decisions_total[5m]))"
+      }],
+      "fieldConfig": {"defaults": {"unit": "percentunit"}}
+    },
+    {
+      "id": 5,
+      "title": "Revocations / sec",
+      "type": "stat",
+      "gridPos": {"x": 18, "y": 8, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "sum(rate(aztdp_token_revocations_total[1m]))"}]
+    }
+  ]
+}

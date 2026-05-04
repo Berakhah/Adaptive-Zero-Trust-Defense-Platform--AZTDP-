@@ -1,0 +1,322 @@
+openapi: "3.1.0"
+
+info:
+  title: AZTDP Anomaly Service
+  version: "1.0.0"
+  description: |
+    ML-based behavioral anomaly detection service. Complements the rule-based
+    risk engine with an Isolation Forest model trained on 11 engineered features
+    extracted from request metadata.
+
+    **This service is implemented in Phase 7.** Until then, the risk engine sets
+    `anomaly_score=0.0` in its response.
+
+    **Model:** `sklearn.ensemble.IsolationForest`
+    - `n_estimators=100`
+    - `contamination=0.05` (5% of training data treated as anomalies)
+    - `random_state=42`
+    - Inference time: <1ms per request (in-process, no network hop)
+    - Retrained on `anomaly_baselines` table; cold-start uses synthetic baseline
+
+    **Feature vector (11 features, in order):**
+    1. `hour_of_day` [0–23]
+    2. `day_of_week` [0–6, Monday=0]
+    3. `endpoint_sensitivity` [1–5]
+    4. `ip_changed` [0 or 1]
+    5. `geo_changed` [0 or 1]
+    6. `ua_changed` [0 or 1]
+    7. `request_rate_1m` [float, requests in last 60s]
+    8. `sensitivity_x_geo_change` [sensitivity * geo_changed]
+    9. `sensitivity_x_ip_change` [sensitivity * ip_changed]
+    10. `time_since_last_request` [seconds, capped at 3600]
+    11. `simultaneous_geo_ip_change` [1 if both changed, else 0]
+
+    **Hot reload:** The service polls `anomaly:model:version` in Redis every 60s.
+    When the training script updates the version key after retraining, the service
+    reloads the model from disk without restarting.
+
+    **Internal service** — not exposed to external clients. Called by the risk
+    engine at `http://anomaly-service:8080` with a 150ms timeout.
+
+servers:
+  - url: http://localhost:8002
+    description: Dev (docker-compose host port)
+  - url: http://anomaly-service:8080
+    description: Internal (container network)
+
+tags:
+  - name: anomaly
+    description: Anomaly scoring endpoints
+
+paths:
+  /v1/anomaly/score:
+    post:
+      operationId: scoreAnomaly
+      tags: [anomaly]
+      summary: Score a request for behavioral anomaly
+      description: |
+        Extracts an 11-feature vector from the request payload (augmented with
+        Redis data for `request_rate_1m` and `time_since_last_request`), runs
+        the Isolation Forest model, and returns a normalized anomaly score.
+
+        **Called by:** `services/risk-engine/app.py` after computing the
+        rule-based risk score. The risk engine passes drift flags it has already
+        computed (`ip_changed`, `geo_changed`, `ua_changed`) to avoid redundant
+        Redis reads.
+
+        **Failure mode:** If this endpoint exceeds the 150ms timeout or returns
+        an error, the risk engine sets `anomaly_score=0.0` and continues. This
+        service failing does not block request processing.
+
+        **Score interpretation:**
+        - 0.0–0.3: Normal behavior (within expected distribution)
+        - 0.3–0.7: Mildly unusual (monitor but do not act alone)
+        - 0.7–1.0: Anomalous — contributes to risk engine total; OPA may trigger stepup/deny
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnomalyRequest"
+            examples:
+              normal_business_hours:
+                summary: Normal request during business hours, no drift
+                value:
+                  request_id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                  user_id: "user-42"
+                  session_id: "sess-abc123"
+                  token_jti_hash: "a3f5c2d1e4b6..."
+                  ip: "203.0.113.10"
+                  geo: "US-CA"
+                  user_agent_hash: "7f83b165..."
+                  hour_of_day: 14
+                  day_of_week: 1
+                  endpoint_sensitivity: 2
+                  ip_changed: false
+                  geo_changed: false
+                  ua_changed: false
+                  request_rate_1m: 2.0
+                  time_since_last_request: 45.0
+              suspicious_night_flood:
+                summary: Rapid requests at 3am with geo change
+                value:
+                  request_id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+                  user_id: "user-42"
+                  session_id: "sess-xyz789"
+                  token_jti_hash: "b4e7f1a2..."
+                  ip: "198.51.100.55"
+                  geo: "CN-SHA"
+                  user_agent_hash: "9a3c4d5e..."
+                  hour_of_day: 3
+                  day_of_week: 6
+                  endpoint_sensitivity: 4
+                  ip_changed: true
+                  geo_changed: true
+                  ua_changed: false
+                  request_rate_1m: 45.0
+                  time_since_last_request: 1.2
+      responses:
+        "200":
+          description: Anomaly score computed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnomalyResponse"
+              examples:
+                normal:
+                  value:
+                    anomaly_score: 0.08
+                    is_anomalous: false
+                    model_version: "v1.0"
+                    confidence: 0.97
+                anomalous:
+                  value:
+                    anomaly_score: 0.84
+                    is_anomalous: true
+                    model_version: "v1.0"
+                    confidence: 0.91
+
+  /health:
+    get:
+      operationId: health
+      summary: Service health check
+      description: Returns 200 when the model is loaded and Redis is reachable.
+        Returns 503 if the model has not yet been trained/loaded.
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, model_version]
+                properties:
+                  status:
+                    type: string
+                    enum: ["ok"]
+                  model_version:
+                    type: string
+                    example: "v1.0"
+              example:
+                status: "ok"
+                model_version: "v1.0"
+        "503":
+          description: Model not yet loaded (training in progress or failed)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["loading"]
+                  detail:
+                    type: string
+              example:
+                status: "loading"
+                detail: "model training in progress"
+
+  /metrics:
+    get:
+      operationId: metrics
+      summary: Prometheus metrics
+      description: |
+        Key metrics:
+        - `aztdp_anomaly_scores_histogram` (histogram of scores)
+        - `aztdp_anomaly_flagged_total` (counter, scores > threshold)
+        - `aztdp_model_inference_latency_seconds` (histogram)
+        - `aztdp_model_version` (gauge, model version as label)
+      responses:
+        "200":
+          description: Prometheus text format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  schemas:
+    AnomalyRequest:
+      type: object
+      required:
+        - request_id
+        - token_jti_hash
+        - hour_of_day
+        - day_of_week
+        - endpoint_sensitivity
+        - ip_changed
+        - geo_changed
+        - ua_changed
+        - request_rate_1m
+        - time_since_last_request
+      properties:
+        request_id:
+          type: string
+          description: Correlation ID
+          example: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+        user_id:
+          type: string
+          nullable: true
+          description: Keycloak subject (`sub`). Used to look up `user:request_rate:{user_id}` in Redis.
+          example: "user-42"
+        session_id:
+          type: string
+          nullable: true
+          example: "sess-abc123"
+        token_jti_hash:
+          type: string
+          description: SHA-256 hex digest of JTI. Used to read `token:last_seen:{hash}` for
+            `time_since_last_request` derivation.
+          example: "a3f5c2d1e4b6..."
+        ip:
+          type: string
+          nullable: true
+          example: "203.0.113.10"
+        geo:
+          type: string
+          nullable: true
+          example: "US-CA"
+        user_agent_hash:
+          type: string
+          nullable: true
+          example: "7f83b165..."
+        hour_of_day:
+          type: integer
+          minimum: 0
+          maximum: 23
+          description: Hour in UTC derived from request timestamp
+          example: 14
+        day_of_week:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: Day of week (0=Monday, 6=Sunday)
+          example: 1
+        endpoint_sensitivity:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: Forwarded from the risk engine request
+          example: 4
+        ip_changed:
+          type: boolean
+          description: Whether the IP changed from `token:last_seen`. Computed by the
+            risk engine before calling this service.
+          example: false
+        geo_changed:
+          type: boolean
+          description: Whether the geo changed from `token:last_seen`.
+          example: false
+        ua_changed:
+          type: boolean
+          description: Whether the user_agent_hash changed from `token:last_seen`.
+          example: false
+        request_rate_1m:
+          type: number
+          format: double
+          description: Requests from this user_id in the last 60 seconds. Computed
+            from the `user:request_rate:{user_id}` Redis sorted set.
+          minimum: 0.0
+          example: 2.0
+        time_since_last_request:
+          type: number
+          format: double
+          description: Seconds since the last request for this token_jti_hash.
+            Derived from `token:last_seen.ts`. Capped at 3600s.
+          minimum: 0.0
+          maximum: 3600.0
+          example: 45.0
+
+    AnomalyResponse:
+      type: object
+      required: [anomaly_score, is_anomalous, model_version, confidence]
+      properties:
+        anomaly_score:
+          type: number
+          format: double
+          minimum: 0.0
+          maximum: 1.0
+          description: |
+            Normalized Isolation Forest anomaly score.
+            0.0 = perfectly normal; 1.0 = extreme anomaly.
+            Computed by mapping sklearn's negative outlier factor to [0,1]
+            using the min/max scores from the training set.
+          example: 0.08
+        is_anomalous:
+          type: boolean
+          description: True when anomaly_score > AZTDP_ANOMALY_THRESHOLD (default 0.7)
+          example: false
+        model_version:
+          type: string
+          description: Version of the Isolation Forest model that produced this score.
+            Matches `anomaly:model:version` in Redis.
+          example: "v1.0"
+        confidence:
+          type: number
+          format: double
+          minimum: 0.0
+          maximum: 1.0
+          description: |
+            Confidence in the score estimate. Derived from the fraction of trees in
+            the forest that agree on the anomaly classification (isolation depth
+            consistency). Higher confidence = more reliable score.
+          example: 0.97

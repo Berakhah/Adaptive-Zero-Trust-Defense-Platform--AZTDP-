@@ -1,0 +1,558 @@
+openapi: "3.1.0"
+
+info:
+  title: AZTDP Forensics Service
+  version: "1.0.0"
+  description: |
+    Audit query and incident reconstruction API. Provides structured access to
+    data in the `audit_events`, `risk_evaluations`, `policy_decisions`, and
+    `sessions` PostgreSQL tables populated by telemetry-ingest.
+
+    **Implemented in Phase 11.**
+
+    **Three query surfaces:**
+    1. `/v1/forensics/events` — flexible event log query with filters
+    2. `/v1/forensics/replay/{session_id}` — ordered timeline of all events for a
+       session, with delta_ms between consecutive events
+    3. `/v1/forensics/incidents/{request_id}` — pivot from a non-allow policy
+       decision to its surrounding context events
+
+    **Internal service** — not exposed to external clients in production.
+    May be exposed to a security analyst dashboard behind an internal VPN/SSO.
+    Reachable at `http://forensics:8080` within the `aztdp` Docker network.
+
+    **Performance:** All queries hit indexed columns. The `idx_audit_session_time`
+    composite index covers the replay query. The `idx_policy_dec_incidents`
+    partial index covers the incident pivot.
+
+servers:
+  - url: http://localhost:8004
+    description: Dev (docker-compose host port)
+  - url: http://forensics:8080
+    description: Internal (container network)
+
+tags:
+  - name: events
+    description: Audit event log queries
+  - name: sessions
+    description: Session timeline reconstruction
+  - name: incidents
+    description: Security incident reconstruction
+
+paths:
+  /v1/forensics/events:
+    get:
+      operationId: queryEvents
+      tags: [events]
+      summary: Query the audit event log
+      description: |
+        Flexible query against `audit_events`. All filters are optional and
+        ANDed together. Supports pagination via `limit` and `offset`.
+
+        **Max limit:** 1000. For bulk exports, use direct PostgreSQL queries.
+
+        **Index usage:**
+        - `session_id` filter → `idx_audit_session_id` (partial, non-null only)
+        - `user_id` filter → `idx_audit_user_id` (partial, non-null only)
+        - `event_type` filter → `idx_audit_event_type`
+        - `from_time`/`to_time` → `idx_audit_occurred_at` (DESC, for recent-first)
+        - Combined `session_id + time` → `idx_audit_session_time` (composite)
+      parameters:
+        - name: session_id
+          in: query
+          schema:
+            type: string
+          description: Filter to a specific Keycloak session
+          example: "sess-abc123"
+        - name: user_id
+          in: query
+          schema:
+            type: string
+          description: Filter to a specific user (Keycloak `sub`)
+          example: "user-42"
+        - name: event_type
+          in: query
+          schema:
+            type: string
+            enum: ["risk_eval", "policy_decision", "token_revocation", "anomaly_score"]
+          description: Filter to a specific event type
+          example: "policy_decision"
+        - name: decision
+          in: query
+          schema:
+            type: string
+            enum: ["allow", "deny", "stepup", "revoke"]
+          description: Filter policy_decision events by decision outcome.
+            Only meaningful when event_type=policy_decision.
+          example: "deny"
+        - name: from_time
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Inclusive lower bound (ISO-8601 UTC)
+          example: "2026-05-03T00:00:00Z"
+        - name: to_time
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Inclusive upper bound (ISO-8601 UTC)
+          example: "2026-05-03T23:59:59Z"
+        - name: service
+          in: query
+          schema:
+            type: string
+            enum: ["gateway", "risk-engine", "anomaly-service", "django-app", "spring-app"]
+          description: Filter to events from a specific service
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+          description: Maximum number of events to return
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+          description: Pagination offset
+      responses:
+        "200":
+          description: Events matching the query
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventsResponse"
+              example:
+                events:
+                  - id: 42
+                    event_id: "550e8400-e29b-41d4-a716-446655440000"
+                    event_type: "policy_decision"
+                    service: "gateway"
+                    request_id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                    session_id: "sess-abc123"
+                    user_id: "user-42"
+                    token_jti_hash: "a3f5c2d1..."
+                    ip: "203.0.113.10"
+                    geo: "US-CA"
+                    payload:
+                      decision: "deny"
+                      rule: "very_high_risk"
+                      risk_score: 0.92
+                    occurred_at: "2026-05-03T14:31:00.123Z"
+                total: 1
+                limit: 100
+                offset: 0
+        "400":
+          description: Invalid query parameters (e.g., unparseable date, limit out of range)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /v1/forensics/replay/{session_id}:
+    get:
+      operationId: replaySession
+      tags: [sessions]
+      summary: Reconstruct a session timeline
+      description: |
+        Returns all audit events for a session in chronological order, with
+        the millisecond delta between consecutive events. This provides a
+        complete "what happened, when" view of any session.
+
+        **Query:** `SELECT * FROM audit_events WHERE session_id=$1 ORDER BY occurred_at ASC`
+
+        **Use cases:**
+        - Understand how risk evolved across a session
+        - Identify the exact request that triggered a deny/stepup/revoke
+        - Verify that enforcement was applied correctly
+
+        **Index:** `idx_audit_session_time` covers this query.
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "sess-abc123"
+      responses:
+        "200":
+          description: Full session timeline
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayResponse"
+              example:
+                session:
+                  session_id: "sess-abc123"
+                  user_id: "user-42"
+                  started_at: "2026-05-03T14:29:00.000Z"
+                  last_seen_at: "2026-05-03T14:31:00.000Z"
+                  ip_first: "203.0.113.10"
+                  geo_first: "US-CA"
+                  ip_last: "198.51.100.55"
+                  geo_last: "CN-SHA"
+                  risk_max: 0.9200
+                  risk_avg: 0.5100
+                  anomaly_max: 0.8400
+                  request_count: 3
+                  decision_counts:
+                    allow: 1
+                    deny: 1
+                    stepup: 1
+                    revoke: 0
+                  is_suspicious: true
+                events:
+                  - event_type: "risk_eval"
+                    occurred_at: "2026-05-03T14:29:00.100Z"
+                    delta_ms: 0
+                    payload:
+                      risk_score: 0.10
+                      trust_score: 0.90
+                  - event_type: "policy_decision"
+                    occurred_at: "2026-05-03T14:29:00.145Z"
+                    delta_ms: 45
+                    payload:
+                      decision: "allow"
+                      rule: "low_risk_allow"
+                  - event_type: "risk_eval"
+                    occurred_at: "2026-05-03T14:31:00.090Z"
+                    delta_ms: 120945
+                    payload:
+                      risk_score: 0.92
+                      trust_score: 0.08
+                  - event_type: "policy_decision"
+                    occurred_at: "2026-05-03T14:31:00.135Z"
+                    delta_ms: 45
+                    payload:
+                      decision: "deny"
+                      rule: "very_high_risk"
+                total_events: 4
+                duration_ms: 120135
+        "404":
+          description: No events found for this session_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+              example:
+                detail: "session not found"
+
+  /v1/forensics/incidents/{request_id}:
+    get:
+      operationId: getIncident
+      tags: [incidents]
+      summary: Reconstruct an incident from a request ID
+      description: |
+        Pivots from a `request_id` — which must correspond to a policy_decision
+        where `decision != 'allow'` — to the full incident context:
+
+        1. Fetches the triggering policy decision from `policy_decisions`
+        2. Fetches all `audit_events` within ±5 seconds of `decided_at` for
+           the same `session_id`
+
+        The ±5s window captures the risk_eval and anomaly_score events that
+        caused the deny/stepup/revoke, even if their timestamps differ slightly
+        due to service clock skew.
+
+        **Index:** `idx_policy_dec_incidents` (partial WHERE decision != 'allow')
+        makes the initial lookup fast.
+
+        **Use case:** When an alert fires (e.g., Grafana dashboard shows a spike
+        in deny decisions), look up a specific `request_id` from the logs to get
+        the full context without writing custom SQL.
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The request_id of a non-allow policy decision
+          example: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+      responses:
+        "200":
+          description: Incident with surrounding context events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncidentResponse"
+              example:
+                incident:
+                  request_id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                  session_id: "sess-abc123"
+                  user_id: "user-42"
+                  token_jti_hash: "a3f5c2d1..."
+                  decision: "deny"
+                  rule: "very_high_risk"
+                  policy: "aztdp.authz"
+                  risk_score: 0.9200
+                  anomaly_score: 0.8400
+                  service: "gateway"
+                  endpoint_path: "/v1/payments/999"
+                  decided_at: "2026-05-03T14:31:00.135Z"
+                context:
+                  - event_id: "aaa"
+                    event_type: "risk_eval"
+                    service: "risk-engine"
+                    occurred_at: "2026-05-03T14:31:00.090Z"
+                    payload:
+                      risk_score: 0.92
+                      reasons: [{"code":"IP_GEO_DRIFT","weight":0.35},{"code":"GEO_DRIFT","weight":0.20},{"code":"HIGH_SENSITIVITY","weight":0.15}]
+                  - event_id: "bbb"
+                    event_type: "anomaly_score"
+                    service: "anomaly-service"
+                    occurred_at: "2026-05-03T14:31:00.105Z"
+                    payload:
+                      anomaly_score: 0.84
+                      is_anomalous: true
+                  - event_id: "ccc"
+                    event_type: "policy_decision"
+                    service: "gateway"
+                    occurred_at: "2026-05-03T14:31:00.135Z"
+                    payload:
+                      decision: "deny"
+                      rule: "very_high_risk"
+        "404":
+          description: No non-allow decision found for this request_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+              example:
+                detail: "incident not found or decision was allow"
+
+  /health:
+    get:
+      operationId: health
+      summary: Service health check
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["ok"]
+              example:
+                status: "ok"
+
+  /metrics:
+    get:
+      operationId: metrics
+      summary: Prometheus metrics
+      description: |
+        Key metrics:
+        - `aztdp_forensics_queries_total` (counter, labels: endpoint)
+        - `aztdp_forensics_query_latency_seconds` (histogram, labels: endpoint)
+      responses:
+        "200":
+          description: Prometheus text format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  schemas:
+    AuditEvent:
+      type: object
+      required: [id, event_id, event_type, service, payload, occurred_at]
+      properties:
+        id:
+          type: integer
+          description: Auto-incremented primary key
+        event_id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+          enum: ["risk_eval", "policy_decision", "token_revocation", "anomaly_score"]
+        service:
+          type: string
+        request_id:
+          type: string
+          nullable: true
+        session_id:
+          type: string
+          nullable: true
+        user_id:
+          type: string
+          nullable: true
+        token_jti_hash:
+          type: string
+          nullable: true
+        ip:
+          type: string
+          nullable: true
+        geo:
+          type: string
+          nullable: true
+        payload:
+          type: object
+          description: Event-type-specific data
+        occurred_at:
+          type: string
+          format: date-time
+
+    SessionSummary:
+      type: object
+      required: [session_id, user_id, started_at, last_seen_at, request_count, decision_counts, is_suspicious]
+      properties:
+        session_id:
+          type: string
+        user_id:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        ip_first:
+          type: string
+          nullable: true
+        geo_first:
+          type: string
+          nullable: true
+        ip_last:
+          type: string
+          nullable: true
+        geo_last:
+          type: string
+          nullable: true
+        risk_max:
+          type: number
+          format: double
+        risk_avg:
+          type: number
+          format: double
+        anomaly_max:
+          type: number
+          format: double
+        request_count:
+          type: integer
+        decision_counts:
+          type: object
+          properties:
+            allow: { type: integer }
+            deny: { type: integer }
+            stepup: { type: integer }
+            revoke: { type: integer }
+        closed_at:
+          type: string
+          format: date-time
+          nullable: true
+        is_suspicious:
+          type: boolean
+
+    TimelineEvent:
+      type: object
+      required: [event_type, occurred_at, delta_ms, payload]
+      properties:
+        event_type:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        delta_ms:
+          type: integer
+          description: Milliseconds since the previous event in this timeline.
+            Always 0 for the first event.
+        payload:
+          type: object
+
+    IncidentDecision:
+      type: object
+      required: [request_id, decision, service, decided_at]
+      properties:
+        request_id:
+          type: string
+        session_id:
+          type: string
+          nullable: true
+        user_id:
+          type: string
+          nullable: true
+        token_jti_hash:
+          type: string
+          nullable: true
+        decision:
+          type: string
+          enum: ["deny", "stepup", "revoke"]
+        rule:
+          type: string
+          nullable: true
+        policy:
+          type: string
+        risk_score:
+          type: number
+          format: double
+          nullable: true
+        anomaly_score:
+          type: number
+          format: double
+          nullable: true
+        service:
+          type: string
+        endpoint_path:
+          type: string
+          nullable: true
+        decided_at:
+          type: string
+          format: date-time
+
+    EventsResponse:
+      type: object
+      required: [events, total, limit, offset]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEvent"
+        total:
+          type: integer
+          description: Total matching rows (before limit/offset)
+        limit:
+          type: integer
+        offset:
+          type: integer
+
+    ReplayResponse:
+      type: object
+      required: [session, events, total_events, duration_ms]
+      properties:
+        session:
+          $ref: "#/components/schemas/SessionSummary"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/TimelineEvent"
+        total_events:
+          type: integer
+        duration_ms:
+          type: integer
+          description: Time in milliseconds from first to last event in the session
+
+    IncidentResponse:
+      type: object
+      required: [incident, context]
+      properties:
+        incident:
+          $ref: "#/components/schemas/IncidentDecision"
+        context:
+          type: array
+          description: All audit events within ±5s of the incident decision for the same session
+          items:
+            $ref: "#/components/schemas/AuditEvent"
+
+    ErrorDetail:
+      type: object
+      properties:
+        detail:
+          type: string

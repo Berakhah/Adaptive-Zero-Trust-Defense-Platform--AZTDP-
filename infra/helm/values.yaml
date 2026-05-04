@@ -1,0 +1,82 @@
+global:
+  registry: aztdp
+  imageTag: latest
+  pullPolicy: IfNotPresent
+  failOpen: false
+
+services:
+  gateway:
+    replicas: 2
+    port: 8080
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits:   {cpu: 500m, memory: 256Mi}
+
+  riskEngine:
+    replicas: 2
+    port: 8080
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits:   {cpu: 500m, memory: 256Mi}
+
+  anomalyService:
+    replicas: 2
+    port: 8080
+    threshold: 0.7
+    resources:
+      requests: {cpu: 200m, memory: 512Mi}
+      limits:   {cpu: 1000m, memory: 1Gi}
+
+  telemetryIngest:
+    replicas: 2
+    port: 8080
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits:   {cpu: 500m, memory: 256Mi}
+
+  forensics:
+    replicas: 2
+    port: 8080
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits:   {cpu: 500m, memory: 256Mi}
+
+  djangoApp:
+    replicas: 2
+    port: 8080
+    resources:
+      requests: {cpu: 200m, memory: 256Mi}
+      limits:   {cpu: 1000m, memory: 512Mi}
+
+  springApp:
+    replicas: 2
+    port: 8082
+    resources:
+      requests: {cpu: 300m, memory: 512Mi}
+      limits:   {cpu: 1000m, memory: 1Gi}
+
+infra:
+  postgres:
+    storage: 5Gi
+    user: aztdp
+    database: aztdp
+    password: aztdp
+  redis:
+    image: redis:7.2-alpine
+    maxMemory: 256mb
+  opa:
+    image: openpolicyagent/opa:0.65.0
+    replicas: 2
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    adminUser: admin
+    adminPassword: admin
+
+observability:
+  prometheus:
+    enabled: true
+    image: prom/prometheus:v2.53.0
+  grafana:
+    enabled: true
+    image: grafana/grafana:11.1.0
+    adminPassword: admin

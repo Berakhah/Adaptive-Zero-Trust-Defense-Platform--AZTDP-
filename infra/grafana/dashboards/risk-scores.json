@@ -1,0 +1,43 @@
+{
+  "title": "AZTDP — Risk & Anomaly Scores",
+  "uid": "aztdp-risk",
+  "schemaVersion": 39,
+  "tags": ["aztdp"],
+  "timezone": "browser",
+  "time": {"from": "now-1h", "to": "now"},
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Risk score distribution (heatmap)",
+      "type": "heatmap",
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "sum by (le) (rate(aztdp_risk_scores_histogram_bucket[5m]))", "format": "heatmap"}]
+    },
+    {
+      "id": 2,
+      "title": "Anomaly score distribution",
+      "type": "heatmap",
+      "gridPos": {"x": 0, "y": 8, "w": 24, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "sum by (le) (rate(aztdp_anomaly_scores_histogram_bucket[5m]))", "format": "heatmap"}]
+    },
+    {
+      "id": 3,
+      "title": "Replay events / sec",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 16, "w": 12, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "rate(aztdp_replay_detected_total[1m])"}]
+    },
+    {
+      "id": 4,
+      "title": "Anomalies flagged / sec",
+      "type": "timeseries",
+      "gridPos": {"x": 12, "y": 16, "w": 12, "h": 6},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "rate(aztdp_anomaly_flagged_total[1m])"}]
+    }
+  ]
+}

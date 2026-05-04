@@ -1,0 +1,382 @@
+version: "3.8"
+
+networks:
+  aztdp:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  grafana_data:
+  anomaly_models:
+  prometheus_data:
+
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: aztdp
+      POSTGRES_USER: aztdp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+      - ./scripts/db/schema.sql:/docker-entrypoint-initdb.d/02_schema.sql:ro
+      - ./infra/postgres/03_grants.sql:/docker-entrypoint-initdb.d/03_grants.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - aztdp
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aztdp -d aztdp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.2-alpine
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    ports:
+      - "6379:6379"
+    networks:
+      - aztdp
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/aztdp
+      KC_DB_USERNAME: aztdp
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+    command: ["start-dev", "--import-realm"]
+    volumes:
+      - ./infra/keycloak:/opt/keycloak/data/import:ro
+    ports:
+      - "8080:8080"
+      - "9000:9000"
+    networks:
+      - aztdp
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/9000; printf \"GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n\" >&3; read -r status <&3; case \"$$status\" in *\" 200 \"*) exit 0 ;; *) exit 1 ;; esac' "]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+
+  opa:
+    image: openpolicyagent/opa:0.65.0
+    command: ["run", "--server", "--addr", "0.0.0.0:8181", "/policies"]
+    volumes:
+      - ./policies:/policies:ro
+    ports:
+      - "8181:8181"
+    networks:
+      - aztdp
+    healthcheck:
+      test: ["CMD", "/opa", "eval", "true"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Backend Services ─────────────────────────────────────────────────────────
+
+  gateway:
+    build: ./services/gateway
+    environment:
+      AZTDP_OPA_URL: http://opa:8181
+      AZTDP_REDIS_URL: redis://redis:6379/0
+      AZTDP_TELEMETRY_URL: http://telemetry-ingest:8080
+      AZTDP_FAIL_OPEN: "false"
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
+    ports:
+      - "8000:8080"
+    networks:
+      - aztdp
+    depends_on:
+      opa:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  risk-engine:
+    build: ./services/risk-engine
+    environment:
+      AZTDP_REDIS_URL: redis://redis:6379/0
+      AZTDP_ANOMALY_URL: http://anomaly-service:8080
+      AZTDP_TELEMETRY_URL: http://telemetry-ingest:8080
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+    ports:
+      - "8001:8080"
+    networks:
+      - aztdp
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  anomaly-service:
+    build: ./services/anomaly-service
+    environment:
+      AZTDP_REDIS_URL: redis://redis:6379/0
+      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
+      AZTDP_MODEL_DIR: /app/models
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+    volumes:
+      - anomaly_models:/app/models
+    ports:
+      - "8002:8080"
+    networks:
+      - aztdp
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  telemetry-ingest:
+    build: ./services/telemetry-ingest
+    environment:
+      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+    ports:
+      - "8003:8080"
+    networks:
+      - aztdp
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  forensics:
+    build: ./services/forensics
+    environment:
+      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
+    ports:
+      - "8004:8080"
+    networks:
+      - aztdp
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Application Services ─────────────────────────────────────────────────────
+
+  django-app:
+    build: ./services/django-app
+    environment:
+      AZTDP_SECRET_KEY: ${AZTDP_SECRET_KEY}
+      AZTDP_DEBUG: "true"
+      AZTDP_ALLOWED_HOSTS: ${AZTDP_ALLOWED_HOSTS:-localhost,127.0.0.1,django-app}
+      AZTDP_TIMEOUT_CONNECT: "1.0"
+      AZTDP_DB_HOST: postgres
+      AZTDP_DB_NAME: aztdp
+      AZTDP_DB_USER: aztdp
+      AZTDP_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      AZTDP_DB_PORT: "5432"
+      AZTDP_OIDC_ISSUER: http://keycloak:8080/realms/aztdp
+      AZTDP_JWKS_URL: http://keycloak:8080/realms/aztdp/protocol/openid-connect/certs
+      AZTDP_AUDIENCE: aztdp-api
+      AZTDP_RISK_ENGINE_URL: http://risk-engine:8080
+      AZTDP_POLICY_GATEWAY_URL: http://gateway:8080
+      AZTDP_TOKEN_REVOKE_URL: http://gateway:8080/v1/tokens/revoke
+      AZTDP_FAIL_OPEN: "false"
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             gunicorn aztdp_django.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 30"
+    ports:
+      - "8010:8000"
+    networks:
+      - aztdp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+      risk-engine:
+        condition: service_healthy
+
+  spring-app:
+    build: ./services/spring-app
+    environment:
+      AZTDP_RISK_ENGINE_URL: http://risk-engine:8080
+      AZTDP_POLICY_GATEWAY_URL: http://gateway:8080
+      AZTDP_TOKEN_REVOKE_URL: http://gateway:8080/v1/tokens/revoke
+      AZTDP_OIDC_ISSUER: http://keycloak:8080/realms/aztdp
+      AZTDP_FAIL_OPEN: "false"
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+    ports:
+      - "8011:8082"
+    networks:
+      - aztdp
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+      risk-engine:
+        condition: service_healthy
+
+  # ── TLS Ingress ───────────────────────────────────────────────────────────────
+
+  nginx:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infra/nginx/certs:/etc/nginx/certs:ro
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8443:8443"
+      - "3443:3443"
+    networks:
+      - aztdp
+    depends_on:
+      - django-app
+      - spring-app
+      - grafana
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Observability ─────────────────────────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--storage.tsdb.retention.time=30d"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - aztdp
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/policy-decisions.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - aztdp
+    depends_on:
+      - prometheus
+
+  # ── Attack Simulation API ─────────────────────────────────────────────────────
+
+  attack-sim:
+    build: ./services/attack-sim
+    environment:
+      AZTDP_BASE_URL: http://django-app:8000
+      AZTDP_KEYCLOAK_TOKEN_URL: http://keycloak:8080/realms/aztdp/protocol/openid-connect/token
+      AZTDP_CLIENT_ID: aztdp-client
+      AZTDP_CLIENT_SECRET: aztdp-secret
+      AZTDP_USERNAME: risk_user
+      AZTDP_PASSWORD: password
+      AZTDP_ATTACK_USERNAME: user1
+      AZTDP_ATTACK_PASSWORD: password
+      AZTDP_PASSWORD_LIST: wrong1,wrong2,wrong3,password
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+      AZTDP_REQUEST_DELAY_MS: "200"
+    ports:
+      - "8090:8090"
+    networks:
+      - aztdp
+    depends_on:
+      gateway:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── SOC Dashboard ─────────────────────────────────────────────────────────────
+
+  dashboard:
+    build: ./services/dashboard
+    environment:
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+    ports:
+      - "8099:8099"
+    networks:
+      - aztdp
+    depends_on:
+      - forensics
+      - gateway
+      - risk-engine
+      - anomaly-service
+      - telemetry-ingest
+      - prometheus
+      - attack-sim
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8099/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

@@ -1,0 +1,2446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AZTDP — Security Operations Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<style>
+/* ════════════════════════════════════════════════════
+   DESIGN TOKENS
+════════════════════════════════════════════════════ */
+:root {
+  --bg:          #060a1a;
+  --bg2:         #0b1124;
+  --bg3:         #11162e;
+  --glass:       rgba(10,14,30,0.82);
+  --glass2:      rgba(14,19,42,0.92);
+  --cyan:        #00cfff;
+  --cyan-dim:    rgba(0,207,255,0.15);
+  --cyan-border: rgba(0,207,255,0.2);
+  --emerald:     #00f59b;
+  --amber:       #ffb21c;
+  --crimson:     #ff355e;
+  --purple:      #5b8cff;
+  --slate:       #9aa7c0;
+  --muted:       #4b5870;
+  --text:        #e6edf8;
+  --mono:        'JetBrains Mono', 'Fira Code', monospace;
+  --sans:        'Space Grotesk', sans-serif;
+  --r-sm:        6px;
+  --r-md:        10px;
+  --r-lg:        16px;
+  --r-xl:        22px;
+  --shadow:      0 4px 32px rgba(0,0,0,0.5);
+  --glow-cyan:   0 0 24px rgba(0,212,255,0.15);
+  --glow-red:    0 0 24px rgba(255,51,102,0.3);
+}
+
+/* ════════════════════════════════════════════════════
+   RESET & BASE
+════════════════════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  min-height: 100vh;
+  background-image:
+    linear-gradient(120deg, rgba(0,207,255,0.06) 0%, rgba(0,0,0,0) 45%),
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(0,207,255,0.08) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 100% 100%, rgba(91,140,255,0.05) 0%, transparent 50%);
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    repeating-linear-gradient(90deg, rgba(0,207,255,0.04) 0 1px, transparent 1px 120px),
+    repeating-linear-gradient(180deg, rgba(0,207,255,0.04) 0 1px, transparent 1px 120px);
+  opacity: 0.25;
+  mix-blend-mode: screen;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(0,212,255,0.25); border-radius: 2px; }
+
+/* ════════════════════════════════════════════════════
+   ANIMATIONS
+════════════════════════════════════════════════════ */
+@keyframes pulse-dot {
+  0%,100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+  50%      { box-shadow: 0 0 0 4px transparent; opacity: 0.7; }
+}
+@keyframes slide-in {
+  from { transform: translateX(20px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+@keyframes fade-up {
+  from { transform: translateY(8px); opacity: 0; }
+  to   { transform: translateY(0);   opacity: 1; }
+}
+@keyframes threat-high {
+  0%,100% { box-shadow: 0 0 6px rgba(255,51,102,0.4); }
+  50%      { box-shadow: 0 0 20px rgba(255,51,102,0.8); }
+}
+@keyframes threat-critical {
+  0%,100% { box-shadow: 0 0 8px rgba(255,0,85,0.6); }
+  50%      { box-shadow: 0 0 32px rgba(255,0,85,1); }
+}
+@keyframes scan {
+  0%   { top: 0; }
+  100% { top: 100%; }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+@keyframes count-flip {
+  0%   { transform: translateY(100%); opacity: 0; }
+  100% { transform: translateY(0);    opacity: 1; }
+}
+@keyframes border-pulse {
+  0%,100% { border-color: var(--cyan-border); }
+  50%      { border-color: rgba(0,212,255,0.45); }
+}
+
+/* ════════════════════════════════════════════════════
+   LAYOUT
+════════════════════════════════════════════════════ */
+#app { display: flex; flex-direction: column; min-height: 100vh; }
+
+main {
+  flex: 1;
+  max-width: 1600px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 92px 24px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+#page-nav {
+  position: sticky;
+  top: 64px;
+  z-index: 80;
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--cyan-border);
+  background: var(--glass);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: var(--shadow);
+  overflow-x: auto;
+}
+#page-nav a {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+#page-nav a:hover { color: var(--text); background: rgba(0,207,255,0.08); }
+#page-nav a.active {
+  color: var(--cyan);
+  border-color: rgba(0,207,255,0.4);
+  background: rgba(0,207,255,0.12);
+  box-shadow: inset 0 0 0 1px rgba(0,207,255,0.25);
+}
+
+.page-section { display: none; }
+.page-section.active {
+  display: block;
+  animation: page-in 0.35s ease;
+}
+
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.grid-2-1 { display: grid; grid-template-columns: 3fr 2fr; gap: 16px; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid-2-3 { display: grid; grid-template-columns: 2fr 3fr; gap: 16px; }
+@media (max-width: 1100px) {
+  .grid-4 { grid-template-columns: repeat(2, 1fr); }
+  .grid-2-1, .grid-2, .grid-2-3 { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  .grid-4 { grid-template-columns: 1fr; }
+  #page-nav { top: 60px; }
+}
+
+/* ════════════════════════════════════════════════════
+   HEADER
+════════════════════════════════════════════════════ */
+#header {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 100;
+  height: 60px;
+  background: rgba(7,9,26,0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--cyan-border);
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  gap: 20px;
+}
+.header-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.logo-icon {
+  width: 32px; height: 32px;
+  background: linear-gradient(135deg, var(--cyan) 0%, var(--purple) 100%);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+.header-title {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--cyan);
+  letter-spacing: 0.12em;
+}
+.header-sub {
+  font-size: 0.65rem;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.header-services {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  overflow: hidden;
+}
+.svc-pip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  cursor: default;
+}
+.svc-pip-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: background 0.3s;
+}
+.svc-pip-dot.ok       { background: var(--emerald); animation: pulse-dot 2s infinite; }
+.svc-pip-dot.degraded { background: var(--amber);   animation: pulse-dot 1.5s infinite; }
+.svc-pip-dot.down     { background: var(--crimson);  animation: pulse-dot 1s infinite; }
+.svc-pip-label {
+  font-family: var(--mono);
+  font-size: 0.5rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+#threat-badge {
+  padding: 3px 12px;
+  border-radius: var(--r-md);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border: 1px solid;
+  transition: all 0.4s;
+}
+#threat-badge.LOW      { color: var(--emerald); border-color: rgba(0,255,136,0.4); background: rgba(0,255,136,0.1); }
+#threat-badge.MEDIUM   { color: var(--amber);   border-color: rgba(255,184,0,0.4);  background: rgba(255,184,0,0.1); }
+#threat-badge.HIGH     { color: var(--crimson);  border-color: rgba(255,51,102,0.5); background: rgba(255,51,102,0.1); animation: threat-high 2s infinite; }
+#threat-badge.CRITICAL { color: #ff0055;         border-color: rgba(255,0,85,0.7);   background: rgba(255,0,85,0.15); animation: threat-critical 1s infinite; }
+#clock {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--slate);
+  letter-spacing: 0.06em;
+}
+#poll-indicator {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: background 0.2s;
+}
+#poll-indicator.polling { background: var(--cyan); animation: pulse-dot 0.5s infinite; }
+
+/* ════════════════════════════════════════════════════
+   SECTION HEADERS
+════════════════════════════════════════════════════ */
+.section-hdr {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.section-title {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--cyan);
+}
+.section-title::before { content: '// '; opacity: 0.4; }
+.section-count {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--muted);
+  background: rgba(0,212,255,0.08);
+  padding: 1px 7px;
+  border-radius: 20px;
+}
+.section-sep {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--cyan-border), transparent);
+}
+
+/* ════════════════════════════════════════════════════
+   GLASS CARD
+════════════════════════════════════════════════════ */
+.card {
+  background: var(--glass);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--cyan-border);
+  border-radius: var(--r-lg);
+  padding: 20px;
+  box-shadow: var(--shadow);
+  position: relative;
+  overflow: hidden;
+  animation: border-pulse 4s ease infinite;
+}
+.card::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(0,212,255,0.4) 50%, transparent 100%);
+}
+.card:hover {
+  border-color: rgba(0,212,255,0.32);
+  box-shadow: var(--shadow), var(--glow-cyan);
+}
+
+/* ════════════════════════════════════════════════════
+   STAT CARDS
+════════════════════════════════════════════════════ */
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.stat-label {
+  font-size: 0.67rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  color: var(--slate);
+}
+.stat-val {
+  font-family: var(--mono);
+  font-size: 2.4rem;
+  font-weight: 700;
+  color: var(--cyan);
+  line-height: 1;
+  overflow: hidden;
+}
+.stat-val span { display: inline-block; animation: count-flip 0.35s ease; }
+.stat-sub {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+.stat-sub .up   { color: var(--crimson); }
+.stat-sub .down { color: var(--emerald); }
+.stat-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg3);
+  margin-top: 6px;
+  overflow: hidden;
+}
+.stat-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--cyan);
+  transition: width 0.6s ease;
+}
+
+/* ════════════════════════════════════════════════════
+   BADGES
+════════════════════════════════════════════════════ */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: var(--r-sm);
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.b-allow   { background: rgba(0,255,136,0.12); color: var(--emerald); border: 1px solid rgba(0,255,136,0.28); }
+.b-deny    { background: rgba(255,51,102,0.12); color: var(--crimson); border: 1px solid rgba(255,51,102,0.28); }
+.b-stepup  { background: rgba(255,184,0,0.12);  color: var(--amber);   border: 1px solid rgba(255,184,0,0.28); }
+.b-revoke  { background: rgba(91,140,255,0.12); color: var(--purple);  border: 1px solid rgba(91,140,255,0.28); }
+.b-suspicious { background: rgba(255,51,102,0.15); color: var(--crimson); border: 1px solid rgba(255,51,102,0.3); }
+.b-clean   { background: rgba(0,255,136,0.1);  color: var(--emerald); border: 1px solid rgba(0,255,136,0.2); }
+
+/* ════════════════════════════════════════════════════
+   LIVE FEED
+════════════════════════════════════════════════════ */
+#feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 440px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.feed-row {
+  display: grid;
+  grid-template-columns: 118px 64px 90px 1fr 60px;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 10px;
+  border-radius: var(--r-sm);
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  transition: background 0.12s;
+  animation: slide-in 0.25s ease;
+  font-family: var(--mono);
+  font-size: 0.73rem;
+}
+.feed-row:hover { background: rgba(0,212,255,0.05); }
+.feed-row.allow  { border-left-color: var(--emerald); }
+.feed-row.deny   { border-left-color: var(--crimson);  background: rgba(255,51,102,0.03); }
+.feed-row.stepup { border-left-color: var(--amber); }
+.feed-row.revoke { border-left-color: var(--purple); }
+.feed-ts    { color: var(--muted); font-size: 0.68rem; }
+.feed-user  { color: var(--slate); overflow: hidden; text-overflow: ellipsis; }
+.feed-geo   { color: var(--muted); font-size: 0.68rem; }
+.feed-risk  { text-align: right; font-weight: 600; }
+.feed-empty {
+  text-align: center;
+  padding: 40px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.feed-hdr {
+  display: grid;
+  grid-template-columns: 118px 64px 90px 1fr 60px;
+  gap: 8px;
+  padding: 4px 10px 8px;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  margin-bottom: 4px;
+}
+
+/* Incident drawer */
+#incident-drawer {
+  position: fixed;
+  right: -440px;
+  top: 60px;
+  bottom: 0;
+  width: 420px;
+  background: var(--glass2);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-left: 1px solid var(--cyan-border);
+  z-index: 200;
+  transition: right 0.3s cubic-bezier(0.4,0,0.2,1);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#incident-drawer.open { right: 0; }
+.drawer-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--cyan-border);
+  flex-shrink: 0;
+}
+.drawer-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.12em; color: var(--cyan); }
+.drawer-close {
+  width: 28px; height: 28px;
+  border: 1px solid var(--cyan-border);
+  border-radius: 6px;
+  background: none;
+  color: var(--slate);
+  cursor: pointer;
+  font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+}
+.drawer-close:hover { background: var(--cyan-dim); color: var(--cyan); }
+.drawer-body { flex: 1; overflow-y: auto; padding: 20px; }
+.drawer-field { margin-bottom: 14px; }
+.drawer-field-label { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 4px; }
+.drawer-field-val { font-family: var(--mono); font-size: 0.78rem; color: var(--text); word-break: break-all; }
+.drawer-section { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; color: var(--cyan); margin: 16px 0 8px; opacity: 0.7; }
+.risk-bar-wrap { height: 8px; background: var(--bg3); border-radius: 4px; overflow: hidden; margin-top: 4px; }
+.risk-bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+
+/* ════════════════════════════════════════════════════
+   CHART PANELS
+════════════════════════════════════════════════════ */
+.chart-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.chart-title {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--slate);
+  font-weight: 600;
+}
+.chart-wrap { position: relative; }
+.chart-center-label {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+}
+.chart-center-val {
+  font-family: var(--mono);
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.chart-center-sub { font-size: 0.6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+
+/* ════════════════════════════════════════════════════
+   HEATMAP
+════════════════════════════════════════════════════ */
+#heatmap-wrap { overflow-x: auto; }
+.heatmap-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 3px;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+}
+.heatmap-table th {
+  color: var(--muted);
+  font-weight: 400;
+  text-align: center;
+  padding: 2px 1px;
+  white-space: nowrap;
+}
+.heatmap-table .row-label {
+  color: var(--slate);
+  text-align: right;
+  padding-right: 8px;
+  white-space: nowrap;
+  font-size: 0.63rem;
+}
+.hm-cell {
+  width: 24px;
+  height: 22px;
+  border-radius: 3px;
+  background: rgba(0,212,255,0.04);
+  text-align: center;
+  line-height: 22px;
+  cursor: default;
+  transition: background 0.3s;
+}
+
+/* Alert box */
+.alert-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  background: rgba(255,51,102,0.06);
+  border: 1px solid rgba(255,51,102,0.2);
+  margin-bottom: 6px;
+  animation: fade-up 0.3s ease;
+}
+.alert-icon { font-size: 14px; }
+.alert-msg { font-size: 0.78rem; flex: 1; }
+.alert-time { font-family: var(--mono); font-size: 0.65rem; color: var(--muted); }
+
+/* Revocation log */
+.revoc-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  animation: slide-in 0.2s ease;
+}
+.revoc-row:last-child { border-bottom: none; }
+.revoc-token { color: var(--purple); flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.revoc-time  { color: var(--muted); font-size: 0.65rem; }
+
+/* ════════════════════════════════════════════════════
+   SESSION EXPLORER
+════════════════════════════════════════════════════ */
+.session-table { width: 100%; border-collapse: collapse; }
+.session-table th {
+  text-align: left;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  padding: 4px 8px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  font-weight: 600;
+}
+.session-table td {
+  padding: 8px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  vertical-align: middle;
+}
+.session-table tr:hover td { background: rgba(0,212,255,0.03); }
+.session-table tr.expanded td { background: rgba(0,212,255,0.05); }
+.btn-replay {
+  padding: 3px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid rgba(0,212,255,0.3);
+  background: none;
+  color: var(--cyan);
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  transition: all 0.15s;
+}
+.btn-replay:hover { background: var(--cyan-dim); }
+
+/* Timeline */
+.timeline-wrap { padding: 14px 0; }
+.tl-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+}
+.tl-time  { color: var(--muted); width: 80px; flex-shrink: 0; font-size: 0.65rem; }
+.tl-delta { color: var(--amber); width: 60px; flex-shrink: 0; font-size: 0.62rem; text-align: right; }
+.tl-pill  { padding: 2px 10px; border-radius: 20px; font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+.tl-pill.policy_decision { background: rgba(0,212,255,0.12); color: var(--cyan); }
+.tl-pill.risk_eval        { background: rgba(255,184,0,0.12); color: var(--amber); }
+.tl-pill.token_revocation { background: rgba(91,140,255,0.12); color: var(--purple); }
+.tl-pill.anomaly_score    { background: rgba(255,51,102,0.12); color: var(--crimson); }
+.tl-detail { color: var(--slate); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-connector {
+  position: absolute;
+  left: 89px;
+  width: 1px;
+  background: linear-gradient(to bottom, transparent, var(--cyan-border), transparent);
+}
+
+/* ════════════════════════════════════════════════════
+   SERVICE HEALTH GRID
+════════════════════════════════════════════════════ */
+#service-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+}
+.svc-card {
+  padding: 14px;
+  border-radius: var(--r-md);
+  background: rgba(7,9,26,0.7);
+  border: 1px solid var(--cyan-border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: all 0.25s;
+  cursor: default;
+  animation: fade-up 0.3s ease;
+}
+.svc-card.ok       { border-color: rgba(0,255,136,0.2); }
+.svc-card.degraded { border-color: rgba(255,184,0,0.3); }
+.svc-card.down     { border-color: rgba(255,51,102,0.4); animation: threat-high 2.5s infinite; }
+.svc-card:hover    { transform: translateY(-2px); box-shadow: var(--glow-cyan); }
+.svc-card-hdr { display: flex; align-items: center; gap: 8px; }
+.svc-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.svc-dot.ok       { background: var(--emerald); }
+.svc-dot.degraded { background: var(--amber); }
+.svc-dot.down     { background: var(--crimson); }
+.svc-dot.unknown  { background: var(--muted); }
+.svc-name { font-size: 0.75rem; font-weight: 600; flex: 1; }
+.svc-port { font-family: var(--mono); font-size: 0.6rem; color: var(--muted); }
+.svc-latency { font-family: var(--mono); font-size: 0.68rem; color: var(--slate); }
+.svc-latency .val { color: var(--cyan); }
+.svc-checked { font-size: 0.6rem; color: var(--muted); }
+.svc-link { font-size: 0.6rem; color: var(--cyan); text-decoration: none; opacity: 0.6; }
+.svc-link:hover { opacity: 1; }
+
+/* ════════════════════════════════════════════════════
+   ATTACK SIM
+════════════════════════════════════════════════════ */
+.attack-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.attack-btn {
+  position: relative;
+  padding: 12px 10px;
+  border-radius: var(--r-md);
+  border: 1px solid rgba(255,51,102,0.35);
+  background: rgba(255,51,102,0.06);
+  color: var(--crimson);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  transition: all 0.18s;
+  overflow: hidden;
+  text-align: center;
+}
+.attack-btn:hover:not(:disabled) {
+  background: rgba(255,51,102,0.14);
+  border-color: rgba(255,51,102,0.6);
+  box-shadow: 0 0 12px rgba(255,51,102,0.25);
+}
+.attack-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.attack-btn.running {
+  background: rgba(255,184,0,0.08);
+  border-color: var(--amber);
+  color: var(--amber);
+  animation: threat-high 1.2s infinite;
+}
+.attack-btn.running::before {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  top: -1px; height: 2px;
+  background: var(--amber);
+  animation: scan 1.2s linear infinite;
+}
+.btn-run-all {
+  width: 100%;
+  padding: 11px;
+  border-radius: var(--r-md);
+  border: 1px solid rgba(0,212,255,0.35);
+  background: rgba(0,212,255,0.06);
+  color: var(--cyan);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  transition: all 0.18s;
+  margin-top: 4px;
+}
+.btn-run-all:hover:not(:disabled) {
+  background: rgba(0,212,255,0.12);
+  border-color: rgba(0,212,255,0.6);
+  box-shadow: var(--glow-cyan);
+}
+.btn-run-all:disabled { opacity: 0.35; cursor: not-allowed; }
+#attack-log {
+  background: rgba(0,0,0,0.5);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: var(--r-md);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  padding: 14px;
+  height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.log-line { line-height: 1.5; animation: fade-up 0.2s ease; }
+.log-line.start   { color: var(--cyan); }
+.log-line.section { color: var(--amber); font-weight: 600; margin-top: 6px; }
+.log-line.log     { color: var(--slate); }
+.log-line.error   { color: var(--crimson); }
+.log-line.done    { color: var(--emerald); font-weight: 600; }
+.log-empty { color: var(--muted); font-style: italic; padding: 20px; text-align: center; }
+
+/* ════════════════════════════════════════════════════
+   INSPECTOR
+════════════════════════════════════════════════════ */
+.inspector-search {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.inspector-search select {
+  padding: 8px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--cyan-border);
+  background: var(--bg3);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  outline: none;
+  cursor: pointer;
+}
+.inspector-search input {
+  flex: 1;
+  padding: 8px 14px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--cyan-border);
+  background: var(--bg3);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.inspector-search input:focus { border-color: rgba(0,212,255,0.5); box-shadow: 0 0 0 3px rgba(0,212,255,0.08); }
+.inspector-search input::placeholder { color: var(--muted); }
+.btn-search {
+  padding: 8px 18px;
+  border-radius: var(--r-md);
+  border: 1px solid rgba(0,212,255,0.4);
+  background: rgba(0,212,255,0.1);
+  color: var(--cyan);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  transition: all 0.15s;
+}
+.btn-search:hover { background: rgba(0,212,255,0.18); }
+
+.tabs { display: flex; gap: 4px; margin-bottom: 14px; }
+.tab-btn {
+  padding: 6px 14px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  background: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  transition: all 0.15s;
+}
+.tab-btn.active {
+  background: var(--cyan-dim);
+  border-color: var(--cyan-border);
+  color: var(--cyan);
+}
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+.inspector-table { width: 100%; border-collapse: collapse; }
+.inspector-table th {
+  text-align: left;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  padding: 4px 8px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  font-weight: 600;
+}
+.inspector-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  vertical-align: middle;
+}
+.inspector-table tr:hover td { background: rgba(0,212,255,0.03); }
+
+.inspector-incident {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  font-family: var(--mono);
+  font-size: 0.73rem;
+}
+.incident-field { display: flex; flex-direction: column; gap: 3px; }
+.incident-label { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
+.incident-val   { color: var(--text); }
+
+.inspector-placeholder {
+  text-align: center;
+  padding: 48px;
+  color: var(--muted);
+}
+.inspector-placeholder .big { font-size: 2.5rem; margin-bottom: 8px; opacity: 0.2; }
+.inspector-placeholder p { font-size: 0.8rem; }
+
+/* ════════════════════════════════════════════════════
+   LOADING SPINNER
+════════════════════════════════════════════════════ */
+.spinner {
+  width: 18px; height: 18px;
+  border: 2px solid rgba(0,212,255,0.2);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  display: inline-block;
+}
+
+/* ════════════════════════════════════════════════════
+   UTILITY
+════════════════════════════════════════════════════ */
+.text-cyan    { color: var(--cyan); }
+.text-emerald { color: var(--emerald); }
+.text-amber   { color: var(--amber); }
+.text-crimson { color: var(--crimson); }
+.text-muted   { color: var(--muted); }
+.text-slate   { color: var(--slate); }
+.mono         { font-family: var(--mono); }
+.flex         { display: flex; }
+.flex-col     { display: flex; flex-direction: column; }
+.items-center { align-items: center; }
+.gap-2 { gap: 8px; }
+.gap-3 { gap: 12px; }
+.mt-2  { margin-top: 8px; }
+.mt-3  { margin-top: 12px; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Connecting overlay */
+#connecting {
+  position: fixed; inset: 0; z-index: 999;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  transition: opacity 0.5s;
+}
+#connecting.hidden { opacity: 0; pointer-events: none; }
+.connect-logo { font-size: 3rem; }
+.connect-text { font-family: var(--mono); font-size: 0.85rem; color: var(--cyan); letter-spacing: 0.15em; }
+.connect-sub  { font-size: 0.72rem; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<!-- Connecting splash -->
+<div id="connecting">
+  <div class="connect-logo">🛡️</div>
+  <div class="spinner" style="width:32px;height:32px;border-width:3px;"></div>
+  <div class="connect-text">AZTDP SECURITY OPERATIONS CENTER</div>
+  <div class="connect-sub">Initializing real-time intelligence feeds…</div>
+</div>
+
+<div id="app">
+
+<!-- ══════════════════════════════════════════
+     HEADER
+════════════════════════════════════════════ -->
+<header id="header">
+  <div class="header-logo">
+    <div class="logo-icon">🛡</div>
+    <div>
+      <div class="header-title">AZTDP</div>
+      <div class="header-sub">Zero-Trust SOC</div>
+    </div>
+  </div>
+
+  <div class="header-services" id="header-services">
+    <!-- Populated by JS -->
+  </div>
+
+  <div class="header-right">
+    <div id="poll-indicator" title="Polling status"></div>
+    <div id="threat-badge" class="LOW">LOW</div>
+    <div id="clock">--:--:--</div>
+  </div>
+</header>
+
+<!-- ══════════════════════════════════════════
+     MAIN CONTENT
+════════════════════════════════════════════ -->
+<main>
+
+  <nav id="page-nav" aria-label="Page navigation">
+    <a href="#/overview" data-route-link="overview">Overview</a>
+    <a href="#/threats" data-route-link="threats">Threats</a>
+    <a href="#/sessions" data-route-link="sessions">Sessions</a>
+    <a href="#/forensics" data-route-link="forensics">Forensics</a>
+    <a href="#/operations" data-route-link="operations">Operations</a>
+  </nav>
+
+  <!-- ── SECTION 1: Executive Summary ─────────── -->
+  <section class="page-section" data-route="overview">
+    <div class="section-hdr">
+      <div class="section-title">Executive Summary</div>
+      <div class="section-sep"></div>
+      <div id="last-updated" class="text-muted mono" style="font-size:0.65rem;"></div>
+    </div>
+    <div class="grid-4">
+      <div class="card stat-card">
+        <div class="stat-label">Decisions / min</div>
+        <div class="stat-val" id="stat-dpm"><span>--</span></div>
+        <div class="stat-sub" id="stat-dpm-sub">awaiting data</div>
+        <div class="stat-bar"><div class="stat-bar-fill" id="bar-dpm" style="width:0%;background:var(--cyan)"></div></div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-label">Deny Rate</div>
+        <div class="stat-val" id="stat-deny" style="color:var(--crimson)"><span>--%</span></div>
+        <div class="stat-sub" id="stat-deny-sub">5-minute window</div>
+        <div class="stat-bar"><div class="stat-bar-fill" id="bar-deny" style="width:0%;background:var(--crimson)"></div></div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-label">Anomaly Rate</div>
+        <div class="stat-val" id="stat-anm" style="color:var(--amber)"><span>--%</span></div>
+        <div class="stat-sub" id="stat-anm-sub">5-minute window</div>
+        <div class="stat-bar"><div class="stat-bar-fill" id="bar-anm" style="width:0%;background:var(--amber)"></div></div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-label">Active Sessions</div>
+        <div class="stat-val" id="stat-sess" style="color:var(--purple)"><span>--</span></div>
+        <div class="stat-sub" id="stat-sess-sub">last 200 events</div>
+        <div class="stat-bar"><div class="stat-bar-fill" id="bar-sess" style="width:0%;background:var(--purple)"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── SECTION 2: Live Intelligence ─────────── -->
+  <section class="page-section" data-route="overview">
+    <div class="section-hdr">
+      <div class="section-title">Live Risk Intelligence</div>
+      <div class="section-count" id="feed-count">0 events</div>
+      <div class="section-sep"></div>
+    </div>
+    <div class="grid-2-1">
+      <!-- Live Feed -->
+      <div class="card" style="padding:16px;">
+        <div class="feed-hdr">
+          <span>Timestamp</span><span>Decision</span><span>User</span><span>Path · IP</span><span>Risk</span>
+        </div>
+        <div id="feed-list">
+          <div class="feed-empty">Waiting for events…</div>
+        </div>
+      </div>
+
+      <!-- Charts column -->
+      <div class="flex-col gap-2" style="gap:12px;">
+        <div class="card chart-panel" style="padding:16px;">
+          <div class="chart-title">Avg Risk Score</div>
+          <div class="chart-wrap" style="height:130px;">
+            <canvas id="chart-risk"></canvas>
+            <div class="chart-center-label">
+              <div class="chart-center-val text-crimson" id="risk-gauge-val">0.00</div>
+              <div class="chart-center-sub">risk</div>
+            </div>
+          </div>
+        </div>
+        <div class="card chart-panel" style="padding:16px;">
+          <div class="chart-title">Anomaly Score Trend</div>
+          <div class="chart-wrap" style="height:90px;">
+            <canvas id="chart-anomaly"></canvas>
+          </div>
+        </div>
+        <div class="card chart-panel" style="padding:16px;">
+          <div class="chart-title">Decision Distribution</div>
+          <div class="chart-wrap" style="height:110px;">
+            <canvas id="chart-decisions"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── SECTION 3: Threat Detection ──────────── -->
+  <section class="page-section" data-route="threats">
+    <div class="section-hdr">
+      <div class="section-title">Threat Detection</div>
+      <div class="section-sep"></div>
+    </div>
+    <div class="grid-2">
+      <!-- Heatmap -->
+      <div class="card">
+        <div class="chart-title" style="margin-bottom:12px;">Activity Heatmap — Last 24 Hours</div>
+        <div id="heatmap-wrap">
+          <table class="heatmap-table" id="heatmap-table">
+            <!-- Populated by JS -->
+          </table>
+        </div>
+      </div>
+      <!-- Alerts + Revocation log -->
+      <div class="flex-col" style="gap:12px;">
+        <div class="card" style="flex:1;">
+          <div class="chart-title" style="margin-bottom:10px;">Active Alerts</div>
+          <div id="alert-list"><div class="text-muted" style="font-size:0.78rem;padding:8px 0;">No active alerts</div></div>
+        </div>
+        <div class="card" style="flex:1;">
+          <div class="chart-title" style="margin-bottom:10px;">Token Revocation Log</div>
+          <div id="revoc-list"><div class="text-muted" style="font-size:0.78rem;padding:8px 0;">No revocations</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── SECTION 4: Session Explorer ──────────── -->
+  <section class="page-section" data-route="sessions">
+    <div class="section-hdr">
+      <div class="section-title">Session Explorer</div>
+      <div class="section-count" id="session-count">0 sessions</div>
+      <div class="section-sep"></div>
+    </div>
+    <div class="card" style="overflow:hidden;">
+      <div style="overflow-x:auto;">
+        <table class="session-table" id="session-table">
+          <thead>
+            <tr>
+              <th>Session ID</th>
+              <th>User</th>
+              <th>Requests</th>
+              <th>Risk Max</th>
+              <th>Anomaly Max</th>
+              <th>Status</th>
+              <th>Last Seen</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="session-tbody">
+            <tr><td colspan="8" class="text-muted" style="text-align:center;padding:32px;">Waiting for session data…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <!-- Timeline panel (shown inline below selected row) -->
+      <div id="timeline-panel" style="display:none;border-top:1px solid var(--cyan-border);padding:16px 8px;">
+        <div class="chart-title" style="margin-bottom:10px;">Session Timeline — <span id="timeline-session-id" class="text-cyan mono"></span></div>
+        <div id="timeline-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── SECTION 5: Service Health ─────────────── -->
+  <section class="page-section" data-route="operations">
+    <div class="section-hdr">
+      <div class="section-title">Service Health</div>
+      <div class="section-count" id="health-count">loading</div>
+      <div class="section-sep"></div>
+      <a href="http://localhost:3000" target="_blank" class="svc-link" style="font-size:0.68rem;opacity:0.7;">Open Grafana ↗</a>
+    </div>
+    <div id="service-grid">
+      <!-- Populated by JS -->
+    </div>
+  </section>
+
+  <!-- ── SECTION 6: Attack Simulation ─────────── -->
+  <section class="page-section" data-route="operations">
+    <div class="section-hdr">
+      <div class="section-title">Attack Simulation Control</div>
+      <div class="section-sep"></div>
+      <div id="sim-status-badge" class="text-muted" style="font-size:0.68rem;font-family:var(--mono);">IDLE</div>
+    </div>
+    <div class="grid-2-3">
+      <!-- Attack buttons -->
+      <div class="card">
+        <div class="chart-title" style="margin-bottom:12px;">Scenarios</div>
+        <div class="attack-grid">
+          <button class="attack-btn" data-attack="brute_force">Brute Force</button>
+          <button class="attack-btn" data-attack="token_replay">Token Replay</button>
+          <button class="attack-btn" data-attack="privilege_escalation">Priv Escalation</button>
+          <button class="attack-btn" data-attack="credential_stuffing">Cred Stuffing</button>
+          <button class="attack-btn" data-attack="geo_drift">Geo Drift</button>
+          <button class="attack-btn" data-attack="anomaly_flood">Anomaly Flood</button>
+        </div>
+        <button class="btn-run-all" id="btn-run-all">⚡ Run All Scenarios</button>
+        <div class="text-muted" style="font-size:0.65rem;margin-top:10px;line-height:1.6;">
+          Simulates real attack patterns against the AZTDP platform. Requires full stack running.
+        </div>
+      </div>
+      <!-- Output log -->
+      <div class="card" style="padding:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div class="chart-title">Output Log</div>
+          <button onclick="AZTDP.sim.clearLog()" style="background:none;border:1px solid var(--cyan-border);color:var(--muted);font-family:var(--mono);font-size:0.62rem;padding:2px 8px;border-radius:var(--r-sm);cursor:pointer;text-transform:uppercase;letter-spacing:0.08em;">Clear</button>
+        </div>
+        <div id="attack-log">
+          <div class="log-empty">Click a scenario button to begin simulation…</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── SECTION 7: Forensics Inspector ────────── -->
+  <section class="page-section" data-route="forensics">
+    <div class="section-hdr">
+      <div class="section-title">Policy &amp; Forensics Inspector</div>
+      <div class="section-sep"></div>
+    </div>
+    <div class="card">
+      <div class="inspector-search">
+        <select id="inspector-type">
+          <option value="user_id">User ID</option>
+          <option value="session_id">Session ID</option>
+          <option value="request_id">Request ID</option>
+          <option value="event_type">Event Type</option>
+        </select>
+        <input id="inspector-input" type="text" placeholder="Search forensics events…">
+        <button class="btn-search" onclick="AZTDP.inspector.search()">Search</button>
+      </div>
+
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="tab-events">Events</button>
+        <button class="tab-btn" data-tab="tab-incident">Incident</button>
+        <button class="tab-btn" data-tab="tab-session">Session</button>
+      </div>
+
+      <div id="tab-events" class="tab-panel active">
+        <div id="inspector-events">
+          <div class="inspector-placeholder">
+            <div class="big">🔍</div>
+            <p>Enter a search term above to query audit events</p>
+          </div>
+        </div>
+      </div>
+
+      <div id="tab-incident" class="tab-panel">
+        <div id="inspector-incident">
+          <div class="inspector-placeholder">
+            <div class="big">🧩</div>
+            <p>Search by Request ID to reconstruct an incident</p>
+          </div>
+        </div>
+      </div>
+
+      <div id="tab-session" class="tab-panel">
+        <div id="inspector-session">
+          <div class="inspector-placeholder">
+            <div class="big">📋</div>
+            <p>Search by Session ID to replay a session timeline</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+</div>
+
+<!-- Incident Drawer -->
+<div id="incident-drawer">
+  <div class="drawer-hdr">
+    <div class="drawer-title">Incident Detail</div>
+    <button class="drawer-close" onclick="AZTDP.ui.closeDrawer()">✕</button>
+  </div>
+  <div class="drawer-body" id="drawer-body">
+    <div class="text-muted" style="font-size:0.8rem;">Select an event to inspect</div>
+  </div>
+</div>
+
+<script>
+/* ════════════════════════════════════════════════════════════════
+   AZTDP SOC DASHBOARD — Single-File SPA
+   All API calls proxied through nginx at /api/<service>/
+════════════════════════════════════════════════════════════════ */
+window.AZTDP = (function () {
+
+  // ── Config ────────────────────────────────────────────────────
+  const CFG = {
+    POLL_MS:       5000,
+    FEED_MAX:      50,
+    EVENT_FETCH_LIMIT: 200,
+    ANM_HISTORY:   24,
+    HEALTH_TIMEOUT: 3500,
+  };
+
+  // ── State ─────────────────────────────────────────────────────
+  const S = {
+    events:       [],
+    sessions:     {},
+    anomalyHist:  [],
+    decCounts:    { allow: 0, deny: 0, stepup: 0, revoke: 0 },
+    metrics:      { dpm: null, denyPct: null, anmPct: null },
+    health:       {},
+    threatLevel:  'LOW',
+    seenEventIds: new Set(),
+    anyRunning:   false,
+    pollTimer:    null,
+    charts:       {},
+  };
+
+  // ── Service Registry ──────────────────────────────────────────
+  const SERVICES = [
+    { key: 'gateway',       label: 'Gateway',       url: '/api/gateway/health',              port: 8000 },
+    { key: 'risk-engine',   label: 'Risk Engine',   url: '/api/risk/health',                 port: 8001 },
+    { key: 'anomaly',       label: 'Anomaly',        url: '/api/anomaly/health',              port: 8002 },
+    { key: 'telemetry',     label: 'Telemetry',     url: '/api/telemetry/health',            port: 8003 },
+    { key: 'forensics',     label: 'Forensics',     url: '/api/forensics/health',            port: 8004 },
+    { key: 'django-app',    label: 'Django App',    url: '/api/django/health',               port: 8010 },
+    { key: 'spring-app',    label: 'Spring App',    url: '/api/spring/actuator/health',      port: 8011 },
+    { key: 'keycloak',      label: 'Keycloak',      url: '/api/keycloak/health/ready',       port: 9000 },
+    { key: 'opa',           label: 'OPA',           url: '/api/opa/health',                  port: 8181 },
+    { key: 'prometheus',    label: 'Prometheus',    url: '/api/prometheus/-/healthy',        port: 9090 },
+    { key: 'grafana',       label: 'Grafana',       url: '/api/grafana/api/health',          port: 3000, link: 'http://localhost:3000' },
+    { key: 'attack-sim',    label: 'Attack Sim',    url: '/api/sim/health',                  port: 8090 },
+    { key: 'dashboard',     label: 'Dashboard',     url: '/',                                port: 8099 },
+  ];
+
+  const ROUTES = [
+    { id: 'overview',   label: 'Overview' },
+    { id: 'threats',    label: 'Threats' },
+    { id: 'sessions',   label: 'Sessions' },
+    { id: 'forensics',  label: 'Forensics' },
+    { id: 'operations', label: 'Operations' },
+  ];
+
+  // ── Utils ─────────────────────────────────────────────────────
+  const U = {
+    fmtTs(iso) {
+      if (!iso) return '--';
+      try {
+        const d = new Date(iso);
+        return d.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      } catch { return iso.slice(11, 19) || '--'; }
+    },
+    relTime(iso) {
+      if (!iso) return '';
+      const diff = Date.now() - new Date(iso).getTime();
+      if (diff < 60000) return `${Math.round(diff / 1000)}s ago`;
+      if (diff < 3600000) return `${Math.round(diff / 60000)}m ago`;
+      return `${Math.round(diff / 3600000)}h ago`;
+    },
+    shortId(id, n = 8) {
+      if (!id) return '--';
+      return id.length > n ? id.slice(0, n) + '…' : id;
+    },
+    riskColor(score) {
+      if (score == null) return 'var(--muted)';
+      if (score >= 0.8) return 'var(--crimson)';
+      if (score >= 0.5) return 'var(--amber)';
+      if (score >= 0.25) return 'var(--cyan)';
+      return 'var(--emerald)';
+    },
+    fmt2(n) {
+      if (n == null || isNaN(n)) return '--';
+      return parseFloat(n).toFixed(2);
+    },
+    fmtPct(n) {
+      if (n == null || isNaN(n)) return '--%';
+      return parseFloat(n).toFixed(1) + '%';
+    },
+    fmtMs(ms) {
+      if (ms == null) return '--';
+      return ms < 1000 ? ms + ' ms' : (ms / 1000).toFixed(1) + ' s';
+    },
+    computeThreat() {
+      const denyPct = S.metrics.denyPct || 0;
+      const anmPct  = S.metrics.anmPct  || 0;
+      const down = Object.values(S.health).filter(h => h.status === 'down').length;
+      if (anmPct > 25 || denyPct > 40 || down >= 4) return 'CRITICAL';
+      if (anmPct > 10 || denyPct > 20 || down >= 2) return 'HIGH';
+      if (anmPct > 3  || denyPct > 8  || down >= 1) return 'MEDIUM';
+      return 'LOW';
+    },
+    decisionClass(d) {
+      if (!d) return '';
+      const m = { allow: 'allow', deny: 'deny', stepup: 'stepup', revoke: 'revoke', fail_open: 'allow' };
+      return m[d.toLowerCase()] || '';
+    },
+    async fetchJSON(url, opts = {}) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), CFG.HEALTH_TIMEOUT);
+      try {
+        const r = await fetch(url, { signal: ctrl.signal, cache: 'no-store', ...opts });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return await r.json();
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    async fetchText(url) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), CFG.HEALTH_TIMEOUT);
+      try {
+        const r = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return await r.text();
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  };
+
+  // ── API ───────────────────────────────────────────────────────
+  const API = {
+    async forensicsEvents(params = {}) {
+      const q = new URLSearchParams({ limit: CFG.EVENT_FETCH_LIMIT, ...params });
+      return U.fetchJSON(`/api/forensics/v1/forensics/events?${q}`);
+    },
+    async forensicsReplay(sessionId) {
+      return U.fetchJSON(`/api/forensics/v1/forensics/replay/${sessionId}`);
+    },
+    async forensicsIncident(requestId) {
+      return U.fetchJSON(`/api/forensics/v1/forensics/incidents/${requestId}`);
+    },
+    async prometheusQuery(expr) {
+      const q = new URLSearchParams({ query: expr });
+      const data = await U.fetchJSON(`/api/prometheus/api/v1/query?${q}`);
+      if (data?.status !== 'success') return null;
+      const res = data?.data?.result;
+      if (!res || !res.length) return null;
+      // Sum all series values
+      const total = res.reduce((acc, r) => {
+        const v = parseFloat(r.value?.[1]);
+        return Number.isFinite(v) ? acc + v : acc;
+      }, 0);
+      return Number.isFinite(total) ? total : null;
+    },
+    async ping(svc) {
+      const start = performance.now();
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), CFG.HEALTH_TIMEOUT);
+      try {
+        const r = await fetch(svc.url, { signal: ctrl.signal, cache: 'no-store' });
+        const latency = Math.round(performance.now() - start);
+        return { status: r.ok ? 'ok' : 'degraded', latency };
+      } catch {
+        return { status: 'down', latency: null };
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  };
+
+  // ── Charts ────────────────────────────────────────────────────
+  const Charts = {
+    init() {
+      // Risk gauge (half-doughnut)
+      const riskCtx = document.getElementById('chart-risk').getContext('2d');
+      S.charts.risk = new Chart(riskCtx, {
+        type: 'doughnut',
+        data: {
+          datasets: [{
+            data: [0.01, 0.99],
+            backgroundColor: ['#ff3366', 'rgba(255,51,102,0.06)'],
+            borderWidth: 0,
+            circumference: 180,
+            rotation: 270,
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          cutout: '76%',
+          plugins: { legend: { display: false }, tooltip: { enabled: false } },
+          animation: { animateRotate: true, duration: 700 },
+        }
+      });
+
+      // Anomaly trend (line)
+      const anmCtx = document.getElementById('chart-anomaly').getContext('2d');
+      S.charts.anomaly = new Chart(anmCtx, {
+        type: 'line',
+        data: {
+          labels: new Array(CFG.ANM_HISTORY).fill(''),
+          datasets: [{
+            data: new Array(CFG.ANM_HISTORY).fill(0),
+            borderColor: '#00cfff',
+            backgroundColor: 'rgba(0,207,255,0.07)',
+            borderWidth: 1.5,
+            pointRadius: 2,
+            pointBackgroundColor: '#00cfff',
+            fill: true,
+            tension: 0.4,
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          scales: {
+            x: { display: false },
+            y: { min: 0, max: 1, display: true,
+              grid: { color: 'rgba(255,255,255,0.03)' },
+              ticks: { color: 'var(--muted)', font: { family: 'JetBrains Mono', size: 9 }, maxTicksLimit: 3 } }
+          },
+          plugins: { legend: { display: false }, tooltip: { enabled: false } },
+          animation: { duration: 300 },
+        }
+      });
+
+      // Decision distribution (doughnut)
+      const decCtx = document.getElementById('chart-decisions').getContext('2d');
+      S.charts.decisions = new Chart(decCtx, {
+        type: 'doughnut',
+        data: {
+          labels: ['Allow', 'Deny', 'Step-Up', 'Revoke'],
+          datasets: [{
+            data: [1, 0, 0, 0],
+            backgroundColor: ['#00ff88', '#ff3366', '#ffb800', '#5b8cff'],
+            borderColor: '#0b0e20',
+            borderWidth: 2,
+            hoverOffset: 4,
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          cutout: '60%',
+          plugins: {
+            legend: {
+              position: 'right',
+              labels: { color: '#94a3b8', font: { size: 10, family: 'JetBrains Mono' }, boxWidth: 10, padding: 6 }
+            },
+            tooltip: { callbacks: {
+              label: ctx => ` ${ctx.label}: ${ctx.parsed}`
+            }}
+          },
+          animation: { duration: 500 },
+        }
+      });
+    },
+
+    updateRisk(score) {
+      if (!S.charts.risk) return;
+      const s = Math.max(0.001, Math.min(1, score || 0));
+      S.charts.risk.data.datasets[0].data = [s, 1 - s];
+      const col = U.riskColor(s);
+      S.charts.risk.data.datasets[0].backgroundColor = [col, col.replace(')', ',0.06)').replace('rgb', 'rgba').replace('var(--', '').replace(')', '')];
+      // Simpler approach: hardcode color array
+      const cols = s >= 0.8 ? ['#ff3366','rgba(255,51,102,0.06)']
+                 : s >= 0.5 ? ['#ffb800','rgba(255,184,0,0.06)']
+                 : s >= 0.25? ['#00cfff','rgba(0,207,255,0.06)']
+                 :             ['#00ff88','rgba(0,255,136,0.06)'];
+      S.charts.risk.data.datasets[0].backgroundColor = cols;
+      S.charts.risk.update('none');
+      const el = document.getElementById('risk-gauge-val');
+      if (el) { el.textContent = s.toFixed(2); el.style.color = cols[0]; }
+    },
+
+    updateAnomaly(val) {
+      if (!S.charts.anomaly) return;
+      S.anomalyHist.push(val || 0);
+      if (S.anomalyHist.length > CFG.ANM_HISTORY) S.anomalyHist.shift();
+      S.charts.anomaly.data.datasets[0].data = [...S.anomalyHist];
+      S.charts.anomaly.update('none');
+    },
+
+    updateDecisions(counts) {
+      if (!S.charts.decisions) return;
+      S.charts.decisions.data.datasets[0].data = [
+        counts.allow || 0, counts.deny || 0, counts.stepup || 0, counts.revoke || 0
+      ];
+      S.charts.decisions.update('none');
+    },
+  };
+
+  // ── Render ────────────────────────────────────────────────────
+  const Render = {
+    clock() {
+      const el = document.getElementById('clock');
+      if (el) el.textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
+    },
+
+    threat() {
+      const level = U.computeThreat();
+      if (level !== S.threatLevel) {
+        S.threatLevel = level;
+        const el = document.getElementById('threat-badge');
+        if (el) { el.textContent = level; el.className = level; }
+      }
+    },
+
+    headerServices() {
+      const el = document.getElementById('header-services');
+      if (!el) return;
+      el.innerHTML = SERVICES.map(svc => {
+        const h = S.health[svc.key] || {};
+        const st = h.status || 'unknown';
+        return `<div class="svc-pip" title="${svc.label}: ${st}${h.latency ? ' (' + h.latency + 'ms)' : ''}">
+          <div class="svc-pip-dot ${st}"></div>
+          <div class="svc-pip-label">${svc.label.split(' ')[0]}</div>
+        </div>`;
+      }).join('');
+    },
+
+    execSummary() {
+      const { dpm, denyPct, anmPct } = S.metrics;
+      const sessions = Object.keys(S.sessions).length;
+
+      const setVal = (id, txt) => {
+        const el = document.getElementById(id);
+        if (el) { el.innerHTML = `<span>${txt}</span>`; }
+      };
+      const setSub = (id, txt) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = txt;
+      };
+      const setBar = (id, pct) => {
+        const el = document.getElementById(id);
+        if (el) el.style.width = Math.min(100, Math.max(0, pct)) + '%';
+      };
+
+      const dpmVal = dpm != null ? Math.round(dpm) : '--';
+      setVal('stat-dpm', dpmVal);
+      setBar('bar-dpm', dpm != null ? Math.min(100, dpm * 2) : 0);
+      setSub('stat-dpm-sub', dpm != null ? '1m Prometheus rate' : 'awaiting data');
+
+      setVal('stat-deny', denyPct != null ? denyPct.toFixed(1) + '%' : '--%');
+      setBar('bar-deny', denyPct || 0);
+      setSub('stat-deny-sub', '5m rate (Prometheus)');
+
+      setVal('stat-anm', anmPct != null ? anmPct.toFixed(1) + '%' : '--%');
+      setBar('bar-anm', anmPct || 0);
+      setSub('stat-anm-sub', '5m rate (Prometheus)');
+
+      setVal('stat-sess', sessions || '--');
+      setBar('bar-sess', Math.min(100, sessions * 5));
+      setSub('stat-sess-sub', `last ${CFG.EVENT_FETCH_LIMIT} events`);
+
+      const ts = document.getElementById('last-updated');
+      if (ts) ts.textContent = 'Updated ' + new Date().toLocaleTimeString('en-GB', { hour12: false });
+    },
+
+    liveFeed(events) {
+      const el = document.getElementById('feed-list');
+      const countEl = document.getElementById('feed-count');
+      if (!el) return;
+      if (countEl) countEl.textContent = events.length + ' events';
+
+      if (!events.length) {
+        el.innerHTML = '<div class="feed-empty">No events yet — start an attack simulation or generate traffic</div>';
+        return;
+      }
+
+      // Track decision counts from feed
+      const counts = { allow: 0, deny: 0, stepup: 0, revoke: 0 };
+      let riskSum = 0, riskCount = 0;
+
+      const rows = events.slice(0, CFG.FEED_MAX).map(ev => {
+        const dec = ev.payload?.decision || ev.event_type;
+        const cls = U.decisionClass(dec);
+        if (counts[cls] !== undefined) counts[cls]++;
+
+        const risk = ev.payload?.risk_score;
+        if (risk != null) { riskSum += risk; riskCount++; }
+
+        const isNew = !S.seenEventIds.has(ev.event_id);
+        S.seenEventIds.add(ev.event_id);
+
+        const path = ev.payload?.endpoint_path || ev.payload?.path || '';
+        const ip = ev.ip || '';
+
+        return `<div class="feed-row ${cls}${isNew ? ' new' : ''}" data-event-id="${ev.event_id}" onclick="AZTDP.ui.openEvent('${ev.event_id}')">
+          <span class="feed-ts">${U.fmtTs(ev.occurred_at)}</span>
+          <span><span class="badge b-${cls}">${cls || ev.event_type}</span></span>
+          <span class="feed-user truncate">${U.shortId(ev.user_id, 10)}</span>
+          <span class="truncate text-slate" style="font-size:0.68rem;">${path || ip}</span>
+          <span class="feed-risk" style="color:${U.riskColor(risk)}">${risk != null ? risk.toFixed(2) : '--'}</span>
+        </div>`;
+      }).join('');
+
+      el.innerHTML = rows;
+
+      // Update charts from feed data
+      Charts.updateDecisions(counts);
+      if (riskCount > 0) {
+        const avg = riskSum / riskCount;
+        Charts.updateRisk(avg);
+        // Latest anomaly score
+        const latestAnm = events[0]?.payload?.anomaly_score;
+        if (latestAnm != null) Charts.updateAnomaly(latestAnm);
+      }
+
+      S.decCounts = counts;
+    },
+
+    serviceGrid() {
+      const el = document.getElementById('service-grid');
+      if (!el) return;
+      const hc = document.getElementById('health-count');
+      const ok = Object.values(S.health).filter(h => h.status === 'ok').length;
+      if (hc) hc.textContent = `${ok}/${SERVICES.length} online`;
+
+      el.innerHTML = SERVICES.map(svc => {
+        const h = S.health[svc.key] || { status: 'unknown', latency: null };
+        const st = h.status;
+        const checked = h.checkedAt ? U.relTime(h.checkedAt) : 'pending';
+        return `<div class="svc-card ${st}">
+          <div class="svc-card-hdr">
+            <div class="svc-dot ${st}"></div>
+            <div class="svc-name">${svc.label}</div>
+            <div class="svc-port">:${svc.port}</div>
+          </div>
+          <div class="svc-latency">
+            ${h.latency != null ? `<span class="val">${h.latency}ms</span>` : '<span class="text-muted">—</span>'}
+          </div>
+          <div class="svc-checked">${checked}</div>
+          ${svc.link ? `<a href="${svc.link}" target="_blank" class="svc-link">Open ↗</a>` : ''}
+        </div>`;
+      }).join('');
+
+      // Update header pips
+      Render.headerServices();
+    },
+
+    sessionList() {
+      const sessions = Object.values(S.sessions);
+      const tbody = document.getElementById('session-tbody');
+      const sc = document.getElementById('session-count');
+      if (!tbody) return;
+      if (sc) sc.textContent = sessions.length + ' sessions';
+
+      if (!sessions.length) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-muted" style="text-align:center;padding:24px;">No sessions detected yet</td></tr>';
+        return;
+      }
+
+      // Sort by last seen desc
+      sessions.sort((a, b) => new Date(b.lastSeen) - new Date(a.lastSeen));
+
+      tbody.innerHTML = sessions.slice(0, 30).map(s => {
+        const susp = s.riskMax > 0.7 || s.anomalyMax > 0.7;
+        return `<tr>
+          <td class="mono text-cyan" style="font-size:0.68rem;">${U.shortId(s.sessionId, 14)}</td>
+          <td class="mono">${U.shortId(s.userId, 12)}</td>
+          <td class="mono text-slate">${s.count}</td>
+          <td class="mono" style="color:${U.riskColor(s.riskMax)}">${s.riskMax != null ? s.riskMax.toFixed(2) : '--'}</td>
+          <td class="mono" style="color:${U.riskColor(s.anomalyMax)}">${s.anomalyMax != null ? s.anomalyMax.toFixed(2) : '--'}</td>
+          <td><span class="badge ${susp ? 'b-suspicious' : 'b-clean'}">${susp ? 'SUSPICIOUS' : 'CLEAN'}</span></td>
+          <td class="text-muted" style="font-size:0.68rem;">${U.relTime(s.lastSeen)}</td>
+          <td><button class="btn-replay" onclick="AZTDP.ui.replaySession('${s.sessionId}')">Replay</button></td>
+        </tr>`;
+      }).join('');
+    },
+
+    heatmap(events) {
+      const el = document.getElementById('heatmap-table');
+      if (!el) return;
+
+      const EVENT_TYPES = ['policy_decision', 'risk_eval', 'token_revocation', 'anomaly_score'];
+      const LABELS = ['Policy', 'Risk Eval', 'Revocation', 'Anomaly'];
+      const now = new Date();
+      const hours = [];
+      for (let i = 23; i >= 0; i--) {
+        const h = new Date(now - i * 3600000);
+        hours.push(h.getHours());
+      }
+
+      const matrix = {};
+      EVENT_TYPES.forEach(t => { matrix[t] = new Array(24).fill(0); });
+
+      events.forEach(ev => {
+        const h = new Date(ev.occurred_at).getHours();
+        const col = 23 - Math.floor((now - new Date(ev.occurred_at)) / 3600000);
+        if (col >= 0 && col < 24 && matrix[ev.event_type]) {
+          matrix[ev.event_type][col]++;
+        }
+      });
+
+      const maxVal = Math.max(1, ...Object.values(matrix).flat());
+
+      const hourHeaders = hours.map(h => `<th>${String(h).padStart(2,'0')}</th>`).join('');
+      const rows = EVENT_TYPES.map((type, i) => {
+        const cells = matrix[type].map((count, ci) => {
+          const intensity = count / maxVal;
+          const alpha = Math.min(0.9, intensity * 0.85 + (count > 0 ? 0.1 : 0));
+          const bg = count > 0 ? `rgba(255,51,102,${alpha.toFixed(2)})` : 'rgba(0,212,255,0.04)';
+          return `<td class="hm-cell" title="${hours[ci]}:00 — ${type}: ${count}" style="background:${bg}">${count > 0 ? count : ''}</td>`;
+        }).join('');
+        return `<tr><td class="row-label">${LABELS[i]}</td>${cells}</tr>`;
+      }).join('');
+
+      el.innerHTML = `<thead><tr><th></th>${hourHeaders}</tr></thead><tbody>${rows}</tbody>`;
+    },
+
+    alerts(events) {
+      const el = document.getElementById('alert-list');
+      if (!el) return;
+
+      const fiveMins = Date.now() - 5 * 60000;
+      const denyRevoke = events.filter(ev => {
+        const dec = ev.payload?.decision;
+        return (dec === 'deny' || dec === 'revoke') && new Date(ev.occurred_at) > fiveMins;
+      });
+
+      if (!denyRevoke.length) {
+        el.innerHTML = '<div class="text-muted" style="font-size:0.78rem;padding:8px 0;">No active alerts in last 5 minutes</div>';
+        return;
+      }
+
+      el.innerHTML = denyRevoke.slice(0, 5).map(ev => {
+        const dec = ev.payload?.decision;
+        const icon = dec === 'revoke' ? '🔴' : '⚠️';
+        const risk = ev.payload?.risk_score;
+        return `<div class="alert-row">
+          <span class="alert-icon">${icon}</span>
+          <div class="alert-msg">
+            <span class="badge b-${dec}" style="margin-right:6px;">${dec}</span>
+            <span class="text-slate" style="font-size:0.72rem;">${U.shortId(ev.user_id, 10)} · ${ev.ip || ''}</span>
+            ${risk != null ? `<span style="float:right;font-family:var(--mono);color:${U.riskColor(risk)};font-size:0.7rem;">risk=${risk.toFixed(2)}</span>` : ''}
+          </div>
+          <span class="alert-time">${U.relTime(ev.occurred_at)}</span>
+        </div>`;
+      }).join('');
+    },
+
+    revocations(events) {
+      const el = document.getElementById('revoc-list');
+      if (!el) return;
+
+      const revocs = events.filter(ev => ev.event_type === 'token_revocation').slice(0, 10);
+      if (!revocs.length) {
+        el.innerHTML = '<div class="text-muted" style="font-size:0.78rem;padding:8px 0;">No recent revocations</div>';
+        return;
+      }
+
+      el.innerHTML = revocs.map(ev => `
+        <div class="revoc-row">
+          <span style="color:var(--purple);font-size:0.8rem;">⊗</span>
+          <span class="revoc-token">${U.shortId(ev.token_jti_hash, 16)}</span>
+          <span class="text-slate" style="font-size:0.68rem;">${U.shortId(ev.user_id, 8)}</span>
+          <span class="revoc-time">${U.relTime(ev.occurred_at)}</span>
+        </div>
+      `).join('');
+    },
+
+    sessionTimeline(sessionId, timeline) {
+      const panel = document.getElementById('timeline-panel');
+      const list  = document.getElementById('timeline-list');
+      const sidEl = document.getElementById('timeline-session-id');
+      if (!panel || !list) return;
+
+      panel.style.display = 'block';
+      if (sidEl) sidEl.textContent = U.shortId(sessionId, 20);
+
+      if (!timeline || !timeline.length) {
+        list.innerHTML = '<div class="text-muted" style="font-size:0.78rem;padding:8px;">No timeline events found</div>';
+        return;
+      }
+
+      list.innerHTML = `<div class="timeline-wrap">` + timeline.map((ev, i) => {
+        const delta = ev.delta_ms != null ? `+${Math.round(ev.delta_ms)}ms` : '';
+        const detail = [ev.ip, ev.geo, ev.payload?.decision || ev.payload?.risk_score].filter(Boolean).join(' · ');
+        return `<div class="tl-row">
+          <span class="tl-time">${U.fmtTs(ev.occurred_at)}</span>
+          <span class="tl-delta">${delta}</span>
+          <span class="tl-pill ${ev.event_type}">${ev.event_type.replace('_',' ')}</span>
+          <span class="tl-detail">${detail}</span>
+        </div>`;
+      }).join('') + `</div>`;
+    },
+  };
+
+  const Router = {
+    getRoute() {
+      const raw = location.hash.replace(/^#\/?/, '').trim();
+      const match = ROUTES.find(r => r.id === raw);
+      return match ? match.id : 'overview';
+    },
+    apply() {
+      const route = this.getRoute();
+      document.querySelectorAll('.page-section').forEach(sec => {
+        sec.classList.toggle('active', sec.dataset.route === route);
+      });
+      document.querySelectorAll('[data-route-link]').forEach(link => {
+        const active = link.dataset.routeLink === route;
+        link.classList.toggle('active', active);
+        if (active) link.setAttribute('aria-current', 'page');
+        else link.removeAttribute('aria-current');
+      });
+      const label = ROUTES.find(r => r.id === route)?.label || 'Overview';
+      document.title = `AZTDP — ${label}`;
+
+      setTimeout(() => {
+        Object.values(S.charts).forEach(chart => {
+          if (chart && typeof chart.resize === 'function') chart.resize();
+        });
+      }, 60);
+    },
+    init() {
+      if (!location.hash || location.hash === '#') {
+        location.hash = '#/overview';
+      }
+      this.apply();
+      window.addEventListener('hashchange', () => this.apply());
+    },
+  };
+
+  // ── Poller ────────────────────────────────────────────────────
+  const Poller = {
+    start() {
+      this.pollAll();
+      S.pollTimer = setInterval(() => this.pollAll(), CFG.POLL_MS);
+    },
+
+    async pollAll() {
+      const ind = document.getElementById('poll-indicator');
+      if (ind) ind.className = 'polling';
+
+      await Promise.allSettled([
+        this.pollEvents(),
+        this.pollHealth(),
+        this.pollPrometheus(),
+      ]);
+
+      Render.threat();
+      Render.execSummary();
+      if (ind) ind.className = '';
+
+      // Hide splash
+      const splash = document.getElementById('connecting');
+      if (splash && !splash.classList.contains('hidden')) {
+        setTimeout(() => splash.classList.add('hidden'), 600);
+      }
+    },
+
+    async pollEvents() {
+      try {
+        const data = await API.forensicsEvents({ limit: CFG.EVENT_FETCH_LIMIT });
+        const events = data?.events || [];
+        S.events = events;
+
+        // Build session map
+        events.forEach(ev => {
+          if (!ev.session_id) return;
+          const sess = S.sessions[ev.session_id] || {
+            sessionId: ev.session_id, userId: ev.user_id,
+            count: 0, riskMax: null, anomalyMax: null, lastSeen: ev.occurred_at,
+          };
+          sess.count++;
+          const risk = ev.payload?.risk_score;
+          const anm  = ev.payload?.anomaly_score;
+          if (risk != null && (sess.riskMax == null || risk > sess.riskMax)) sess.riskMax = risk;
+          if (anm  != null && (sess.anomalyMax == null || anm > sess.anomalyMax)) sess.anomalyMax = anm;
+          if (!sess.lastSeen || ev.occurred_at > sess.lastSeen) sess.lastSeen = ev.occurred_at;
+          S.sessions[ev.session_id] = sess;
+        });
+
+        Render.liveFeed(events);
+        Render.sessionList();
+        Render.heatmap(events);
+        Render.alerts(events);
+        Render.revocations(events);
+      } catch (_) {}
+    },
+
+    async pollHealth() {
+      const results = await Promise.allSettled(
+        SERVICES.map(async svc => {
+          const r = await API.ping(svc);
+          return { key: svc.key, ...r, checkedAt: new Date().toISOString() };
+        })
+      );
+      results.forEach(r => {
+        if (r.status === 'fulfilled') {
+          S.health[r.value.key] = r.value;
+        }
+      });
+      Render.serviceGrid();
+    },
+
+    async pollPrometheus() {
+      const [dpm, denyRate, anmRate] = await Promise.allSettled([
+        API.prometheusQuery('sum(rate(aztdp_policy_decisions_total[1m])) * 60'),
+        API.prometheusQuery('sum(rate(aztdp_policy_decisions_total{decision="deny"}[5m])) / sum(rate(aztdp_policy_decisions_total[5m])) * 100'),
+        API.prometheusQuery('sum(rate(aztdp_anomaly_flagged_total[5m])) / sum(rate(aztdp_policy_decisions_total[5m])) * 100'),
+      ]);
+
+      S.metrics.dpm = dpm.status === 'fulfilled' ? dpm.value : null;
+      S.metrics.denyPct = denyRate.status === 'fulfilled' ? denyRate.value : null;
+      S.metrics.anmPct = anmRate.status === 'fulfilled' ? anmRate.value : null;
+    },
+  };
+
+  // ── Attack Sim ────────────────────────────────────────────────
+  const Sim = {
+    activeReader: null,
+
+    async runAttack(attackType) {
+      if (S.anyRunning) return;
+      this.clearLog();
+      this.appendLog(`Launching ${attackType} scenario…`, 'start');
+      this._setRunning(attackType, true);
+
+      try {
+        const response = await fetch(`/api/sim/v1/sim/${attackType}`, {
+          method: 'POST', cache: 'no-store'
+        });
+
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          this.appendLog(`Error: ${err.detail || response.status}`, 'error');
+          this._setRunning(attackType, false);
+          return;
+        }
+
+        await this._streamResponse(response);
+      } catch (e) {
+        this.appendLog(`Connection failed: ${e.message}`, 'error');
+      } finally {
+        this._setRunning(attackType, false);
+      }
+    },
+
+    async runAll() {
+      if (S.anyRunning) return;
+      this.clearLog();
+      this.appendLog('Launching all 6 attack scenarios…', 'start');
+      S.anyRunning = true;
+      this._updateButtons();
+
+      try {
+        const response = await fetch('/api/sim/v1/sim/all/run', {
+          method: 'POST', cache: 'no-store'
+        });
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          this.appendLog(`Error: ${err.detail || response.status}`, 'error');
+        } else {
+          await this._streamResponse(response);
+        }
+      } catch (e) {
+        this.appendLog(`Connection failed: ${e.message}`, 'error');
+      } finally {
+        S.anyRunning = false;
+        this._updateButtons();
+      }
+    },
+
+    async _streamResponse(response) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const evt = JSON.parse(line.slice(6));
+            this.appendLog(evt.msg, evt.type);
+          } catch (_) {}
+        }
+      }
+    },
+
+    _setRunning(type, running) {
+      S.anyRunning = running;
+      const btn = document.querySelector(`[data-attack="${type}"]`);
+      if (btn) {
+        btn.classList.toggle('running', running);
+        btn.disabled = running;
+      }
+      this._updateButtons();
+      const badge = document.getElementById('sim-status-badge');
+      if (badge) badge.textContent = running ? `RUNNING — ${type.toUpperCase().replace('_',' ')}` : 'IDLE';
+    },
+
+    _updateButtons() {
+      document.querySelectorAll('.attack-btn').forEach(btn => {
+        if (!btn.classList.contains('running')) btn.disabled = S.anyRunning;
+      });
+      const runAll = document.getElementById('btn-run-all');
+      if (runAll) runAll.disabled = S.anyRunning;
+    },
+
+    appendLog(msg, type = 'log') {
+      const log = document.getElementById('attack-log');
+      if (!log) return;
+      const empty = log.querySelector('.log-empty');
+      if (empty) empty.remove();
+
+      const line = document.createElement('div');
+      line.className = `log-line ${type}`;
+      line.textContent = `${new Date().toLocaleTimeString('en-GB', {hour12:false})}  ${msg}`;
+      log.appendChild(line);
+      log.scrollTop = log.scrollHeight;
+    },
+
+    clearLog() {
+      const log = document.getElementById('attack-log');
+      if (log) log.innerHTML = '';
+    },
+  };
+
+  // ── UI Interactions ───────────────────────────────────────────
+  const UI = {
+    async openEvent(eventId) {
+      const ev = S.events.find(e => e.event_id === eventId);
+      const drawer = document.getElementById('incident-drawer');
+      const body   = document.getElementById('drawer-body');
+      if (!drawer || !body) return;
+      drawer.classList.add('open');
+
+      if (!ev) { body.innerHTML = '<div class="text-muted">Event not found in cache</div>'; return; }
+
+      const dec = ev.payload?.decision || '--';
+      const risk = ev.payload?.risk_score;
+      const anm  = ev.payload?.anomaly_score;
+      const riskPct = risk != null ? (risk * 100).toFixed(0) : 0;
+      const anmPct  = anm  != null ? (anm  * 100).toFixed(0) : 0;
+
+      body.innerHTML = `
+        <div class="drawer-field">
+          <div class="drawer-field-label">Event ID</div>
+          <div class="drawer-field-val text-cyan">${U.shortId(ev.event_id, 28)}</div>
+        </div>
+        <div class="drawer-field">
+          <div class="drawer-field-label">Timestamp</div>
+          <div class="drawer-field-val">${ev.occurred_at || '--'}</div>
+        </div>
+        <div class="drawer-field">
+          <div class="drawer-field-label">Event Type</div>
+          <div class="drawer-field-val">${ev.event_type || '--'}</div>
+        </div>
+        <div class="drawer-field">
+          <div class="drawer-field-label">Decision</div>
+          <div class="drawer-field-val"><span class="badge b-${U.decisionClass(dec)}">${dec}</span></div>
+        </div>
+        <div class="drawer-section">Identity</div>
+        <div class="drawer-field">
+          <div class="drawer-field-label">User ID</div>
+          <div class="drawer-field-val">${ev.user_id || '--'}</div>
+        </div>
+        <div class="drawer-field">
+          <div class="drawer-field-label">Session ID</div>
+          <div class="drawer-field-val text-cyan">${U.shortId(ev.session_id, 24)}</div>
+        </div>
+        <div class="drawer-field">
+          <div class="drawer-field-label">IP Address</div>
+          <div class="drawer-field-val">${ev.ip || '--'}</div>
+        </div>
+        <div class="drawer-field">
+          <div class="drawer-field-label">Geo</div>
+          <div class="drawer-field-val">${ev.geo || '--'}</div>
+        </div>
+        <div class="drawer-section">Risk Scores</div>
+        ${risk != null ? `
+        <div class="drawer-field">
+          <div class="drawer-field-label">Risk Score</div>
+          <div class="drawer-field-val" style="color:${U.riskColor(risk)}">${risk.toFixed(4)}</div>
+          <div class="risk-bar-wrap"><div class="risk-bar-fill" style="width:${riskPct}%;background:${U.riskColor(risk)}"></div></div>
+        </div>` : ''}
+        ${anm != null ? `
+        <div class="drawer-field">
+          <div class="drawer-field-label">Anomaly Score</div>
+          <div class="drawer-field-val" style="color:${U.riskColor(anm)}">${anm.toFixed(4)}</div>
+          <div class="risk-bar-wrap"><div class="risk-bar-fill" style="width:${anmPct}%;background:${U.riskColor(anm)}"></div></div>
+        </div>` : ''}
+        ${ev.payload?.reasons?.length ? `
+        <div class="drawer-section">Risk Reasons</div>
+        ${ev.payload.reasons.map(r => `
+          <div class="drawer-field">
+            <div class="flex items-center gap-2">
+              <span class="badge b-deny">${r.code}</span>
+              <span class="mono text-slate" style="font-size:0.7rem;">weight: ${(r.weight||0).toFixed(3)}</span>
+            </div>
+          </div>`).join('')}` : ''}
+        <div class="drawer-section">Service</div>
+        <div class="drawer-field">
+          <div class="drawer-field-label">Service</div>
+          <div class="drawer-field-val">${ev.service || '--'}</div>
+        </div>
+        <div class="drawer-field">
+          <div class="drawer-field-label">Endpoint</div>
+          <div class="drawer-field-val mono">${ev.payload?.endpoint_path || '--'}</div>
+        </div>
+        <div class="drawer-field" style="margin-top:16px;">
+          <button onclick="AZTDP.ui.replaySession('${ev.session_id}')"
+            style="padding:6px 14px;border-radius:var(--r-sm);border:1px solid rgba(0,212,255,0.3);
+                   background:var(--cyan-dim);color:var(--cyan);font-family:var(--mono);
+                   font-size:0.68rem;cursor:pointer;text-transform:uppercase;letter-spacing:0.08em;">
+            View Session Timeline
+          </button>
+        </div>
+      `;
+    },
+
+    closeDrawer() {
+      const d = document.getElementById('incident-drawer');
+      if (d) d.classList.remove('open');
+    },
+
+    async replaySession(sessionId) {
+      // Close drawer, scroll to session section
+      this.closeDrawer();
+      const tp = document.getElementById('timeline-panel');
+      const tl = document.getElementById('timeline-list');
+      if (tp) { tp.style.display = 'block'; }
+      if (tl) { tl.innerHTML = '<div class="text-muted" style="padding:16px;font-size:0.78rem;">Loading session timeline…</div>'; }
+
+      document.getElementById('session-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+      try {
+        const data = await API.forensicsReplay(sessionId);
+        const timeline = data?.timeline || [];
+        Render.sessionTimeline(sessionId, timeline);
+      } catch (e) {
+        if (tl) tl.innerHTML = `<div class="text-crimson" style="padding:16px;font-size:0.78rem;">Failed to load session: ${e.message}</div>`;
+      }
+    },
+
+    switchTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      document.querySelector(`[data-tab="${tabId}"]`)?.classList.add('active');
+      document.getElementById(tabId)?.classList.add('active');
+    },
+  };
+
+  // ── Inspector ─────────────────────────────────────────────────
+  const Inspector = {
+    async search() {
+      const type  = document.getElementById('inspector-type')?.value;
+      const value = document.getElementById('inspector-input')?.value?.trim();
+      if (!value) return;
+
+      // Show events tab
+      UI.switchTab('tab-events');
+
+      const evEl  = document.getElementById('inspector-events');
+      const incEl = document.getElementById('inspector-incident');
+      const sesEl = document.getElementById('inspector-session');
+
+      if (evEl) evEl.innerHTML = '<div class="text-muted" style="padding:16px;">Loading…</div>';
+
+      try {
+        const params = { limit: 100, [type]: value };
+        const data = await API.forensicsEvents(params);
+        const events = data?.events || [];
+
+        if (!events.length) {
+          if (evEl) evEl.innerHTML = '<div class="text-muted" style="padding:24px;">No events found</div>';
+          return;
+        }
+
+        const rows = events.map(ev => {
+          const dec = ev.payload?.decision;
+          const risk = ev.payload?.risk_score;
+          return `<tr>
+            <td class="mono text-muted" style="font-size:0.65rem;">${U.fmtTs(ev.occurred_at)}</td>
+            <td>${ev.event_type}</td>
+            <td>${dec ? `<span class="badge b-${U.decisionClass(dec)}">${dec}</span>` : '--'}</td>
+            <td class="mono">${U.shortId(ev.user_id, 12)}</td>
+            <td class="mono">${ev.ip || '--'}</td>
+            <td class="mono" style="color:${U.riskColor(risk)}">${risk != null ? risk.toFixed(3) : '--'}</td>
+            <td><button class="btn-replay" onclick="AZTDP.ui.openEvent('${ev.event_id}');AZTDP.sim._setRunning('',false);" style="font-size:0.6rem;">Detail</button></td>
+          </tr>`;
+        }).join('');
+
+        if (evEl) evEl.innerHTML = `
+          <table class="inspector-table">
+            <thead><tr><th>Time</th><th>Type</th><th>Decision</th><th>User</th><th>IP</th><th>Risk</th><th></th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>`;
+
+        // If searching by request_id, also load incident
+        if (type === 'request_id') {
+          this.loadIncident(value, incEl);
+        }
+        // If searching by session_id, also load session replay
+        if (type === 'session_id') {
+          this.loadSession(value, sesEl);
+        }
+      } catch (e) {
+        if (evEl) evEl.innerHTML = `<div class="text-crimson" style="padding:24px;">Error: ${e.message}</div>`;
+      }
+    },
+
+    async loadIncident(requestId, el) {
+      if (!el) return;
+      UI.switchTab('tab-incident');
+      el.innerHTML = '<div class="text-muted" style="padding:16px;">Loading incident…</div>';
+      try {
+        const data = await API.forensicsIncident(requestId);
+        const dec  = data?.decision || {};
+        const risk = data?.risk || {};
+        const risk_score = dec.risk_score ?? risk.risk_score;
+        const anm_score  = dec.anomaly_score ?? risk.anomaly_score;
+
+        el.innerHTML = `
+          <div class="inspector-incident" style="margin-bottom:16px;">
+            <div class="incident-field">
+              <div class="incident-label">Decision</div>
+              <div class="incident-val"><span class="badge b-${U.decisionClass(dec.decision)}">${dec.decision || '--'}</span></div>
+            </div>
+            <div class="incident-field">
+              <div class="incident-label">Rule</div>
+              <div class="incident-val mono">${dec.rule || '--'}</div>
+            </div>
+            <div class="incident-field">
+              <div class="incident-label">Risk Score</div>
+              <div class="incident-val mono" style="color:${U.riskColor(risk_score)}">${risk_score != null ? risk_score.toFixed(4) : '--'}</div>
+            </div>
+            <div class="incident-field">
+              <div class="incident-label">Anomaly Score</div>
+              <div class="incident-val mono" style="color:${U.riskColor(anm_score)}">${anm_score != null ? anm_score.toFixed(4) : '--'}</div>
+            </div>
+            <div class="incident-field">
+              <div class="incident-label">User</div>
+              <div class="incident-val mono">${dec.user_id || '--'}</div>
+            </div>
+            <div class="incident-field">
+              <div class="incident-label">Service · Path</div>
+              <div class="incident-val mono">${dec.service || ''} ${dec.endpoint_path || ''}</div>
+            </div>
+            <div class="incident-field">
+              <div class="incident-label">Decided At</div>
+              <div class="incident-val mono">${dec.decided_at || '--'}</div>
+            </div>
+            <div class="incident-field">
+              <div class="incident-label">Risk Reasons</div>
+              <div class="incident-val">
+                ${(risk.reasons || []).map(r => `<span class="badge b-deny" style="margin:2px;">${r.code}</span>`).join('') || '--'}
+              </div>
+            </div>
+          </div>
+          ${data?.context_window?.length ? `
+          <div class="chart-title" style="margin-bottom:10px;">Context Window (±events around decision)</div>
+          <div class="timeline-wrap">
+            ${data.context_window.map(ev => `
+              <div class="tl-row">
+                <span class="tl-time">${U.fmtTs(ev.occurred_at)}</span>
+                <span class="tl-delta"></span>
+                <span class="tl-pill ${ev.event_type}">${ev.event_type.replace('_',' ')}</span>
+                <span class="tl-detail">${ev.ip || ''} ${ev.geo || ''}</span>
+              </div>`).join('')}
+          </div>` : ''}`;
+      } catch (e) {
+        el.innerHTML = `<div class="text-crimson" style="padding:24px;">Error loading incident: ${e.message}</div>`;
+      }
+    },
+
+    async loadSession(sessionId, el) {
+      if (!el) return;
+      UI.switchTab('tab-session');
+      el.innerHTML = '<div class="text-muted" style="padding:16px;">Loading session…</div>';
+      try {
+        const data = await API.forensicsReplay(sessionId);
+        const timeline = data?.timeline || [];
+
+        if (!timeline.length) { el.innerHTML = '<div class="text-muted" style="padding:16px;">No timeline data</div>'; return; }
+
+        el.innerHTML = `
+          <div class="timeline-wrap">
+            ${timeline.map(ev => {
+              const delta = ev.delta_ms != null ? `+${Math.round(ev.delta_ms)}ms` : '';
+              const detail = [ev.ip, ev.geo, ev.payload?.decision || ev.payload?.risk_score?.toFixed(3)].filter(Boolean).join(' · ');
+              return `<div class="tl-row">
+                <span class="tl-time">${U.fmtTs(ev.occurred_at)}</span>
+                <span class="tl-delta">${delta}</span>
+                <span class="tl-pill ${ev.event_type}">${ev.event_type.replace('_',' ')}</span>
+                <span class="tl-detail">${detail}</span>
+              </div>`;
+            }).join('')}
+          </div>`;
+      } catch (e) {
+        el.innerHTML = `<div class="text-crimson" style="padding:24px;">Error: ${e.message}</div>`;
+      }
+    },
+  };
+
+  // ── Init ──────────────────────────────────────────────────────
+  function init() {
+    // Routing
+    Router.init();
+
+    // Clock
+    Render.clock();
+    setInterval(Render.clock, 1000);
+
+    // Charts
+    Charts.init();
+
+    // Build initial service grid skeleton
+    Render.serviceGrid();
+    Render.headerServices();
+
+    // Heatmap skeleton
+    Render.heatmap([]);
+
+    // Attack buttons
+    document.querySelectorAll('.attack-btn').forEach(btn => {
+      btn.addEventListener('click', () => Sim.runAttack(btn.dataset.attack));
+    });
+    document.getElementById('btn-run-all')?.addEventListener('click', () => Sim.runAll());
+
+    // Tab switching
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => UI.switchTab(btn.dataset.tab));
+    });
+
+    // Inspector enter key
+    document.getElementById('inspector-input')?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') Inspector.search();
+    });
+
+    // Drawer close on backdrop
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') UI.closeDrawer(); });
+
+    // Start polling
+    Poller.start();
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
+
+  // ── Public API ────────────────────────────────────────────────
+  return {
+    sim:       { ...Sim, _setRunning: Sim._setRunning.bind(Sim) },
+    ui:        UI,
+    inspector: { search: () => Inspector.search() },
+    state:     S,
+    render:    Render,
+  };
+})();
+</script>
+</body>
+</html>

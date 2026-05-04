@@ -1,0 +1,342 @@
+openapi: "3.1.0"
+
+info:
+  title: AZTDP Risk Engine
+  version: "1.0.0"
+  description: |
+    Behavioral risk scoring service. Maintains per-token last-seen state
+    (IP, geo, user-agent hash, timestamp) in Redis and computes a weighted
+    risk score delta on each request.
+
+    **Scoring model:**
+    ```
+    risk = 0.10 (base)
+         + 0.15 (if endpoint.sensitivity >= 4)
+         + 0.35 (if ip changed from last seen)
+         + 0.20 (if user_agent_hash changed)
+         + 0.20 (if geo changed)
+         capped at 1.0
+    trust_score = 1.0 - risk_score
+    ```
+
+    All weights are overridable via environment variables.
+
+    **Replay detection:** If the same token's IP changes within
+    `AZTDP_REPLAY_WINDOW_SECONDS` (default 60s), the request is rejected
+    with HTTP 409. The caller must treat this as a hard deny regardless of
+    `fail_open` setting.
+
+    **Internal service** — not exposed to external clients. Reachable at
+    `http://risk-engine:8080` within the `aztdp` Docker network.
+
+servers:
+  - url: http://localhost:8001
+    description: Dev (docker-compose host port)
+  - url: http://risk-engine:8080
+    description: Internal (container network)
+
+tags:
+  - name: risk
+    description: Risk scoring and evaluation
+
+paths:
+  /v1/risk/evaluate:
+    post:
+      operationId: evaluateRisk
+      tags: [risk]
+      summary: Score a request for behavioral risk
+      description: |
+        Computes a risk score for a single request by comparing the current
+        request attributes (IP, geo, user-agent hash) against the last-seen
+        state for the same `token_jti_hash`.
+
+        **State lifecycle:**
+        1. Look up `token:last_seen:{token_jti_hash}` in Redis/memory.
+        2. Score drift between current and last-seen values.
+        3. If IP changed AND change occurred within the replay window: return 409.
+        4. Otherwise: update `token:last_seen` and return scores.
+
+        **Phase 7 addition:** After scoring, the risk engine calls the anomaly
+        service at `POST /v1/anomaly/score` (150ms timeout, fail-open). The
+        returned `anomaly_score` is included in the response. Until Phase 7 is
+        deployed, `anomaly_score` is absent from the response; callers must
+        default to 0.0.
+
+        **Latency budget:** Callers set a 200ms connect / 800ms read timeout.
+        The typical response time is 5–30ms including the Redis round-trip.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RiskRequest"
+            examples:
+              first_request:
+                summary: First request from this token (no history)
+                value:
+                  request_id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                  session_id: "sess-abc123"
+                  user_id: "user-42"
+                  token_jti_hash: "a3f5c2d1e4b6c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3"
+                  ip: "203.0.113.10"
+                  geo: "US-CA"
+                  user_agent_hash: "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+                  endpoint:
+                    service: "django-app"
+                    method: "GET"
+                    path: "/v1/payments/123"
+                    sensitivity: 4
+                  timestamp: "2026-05-03T14:30:00.000Z"
+              ip_drift:
+                summary: Same token, different IP (risk will include IP_GEO_DRIFT)
+                value:
+                  request_id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+                  session_id: "sess-abc123"
+                  user_id: "user-42"
+                  token_jti_hash: "a3f5c2d1e4b6c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3"
+                  ip: "198.51.100.55"
+                  geo: "GB-LDN"
+                  user_agent_hash: "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+                  endpoint:
+                    service: "django-app"
+                    method: "GET"
+                    path: "/v1/payments/123"
+                    sensitivity: 4
+                  timestamp: "2026-05-03T14:31:30.000Z"
+      responses:
+        "200":
+          description: Risk scored successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RiskResponse"
+              examples:
+                low_risk:
+                  summary: No drift, low-sensitivity endpoint
+                  value:
+                    risk_score: 0.1000
+                    trust_score: 0.9000
+                    reasons: []
+                    ttl_seconds: 1800
+                high_risk_drift:
+                  summary: IP and geo drift on high-sensitivity endpoint
+                  value:
+                    risk_score: 0.8000
+                    trust_score: 0.2000
+                    reasons:
+                      - code: "HIGH_SENSITIVITY"
+                        weight: 0.15
+                      - code: "IP_GEO_DRIFT"
+                        weight: 0.35
+                      - code: "GEO_DRIFT"
+                        weight: 0.20
+                    ttl_seconds: 1800
+                with_anomaly:
+                  summary: Phase 7 — includes anomaly score
+                  value:
+                    risk_score: 0.4500
+                    trust_score: 0.5500
+                    anomaly_score: 0.8200
+                    reasons:
+                      - code: "IP_GEO_DRIFT"
+                        weight: 0.35
+                    ttl_seconds: 1800
+        "409":
+          description: |
+            Token replay detected. The same `token_jti_hash` was seen from a
+            different IP within the replay window (default 60s).
+
+            **Callers must treat this as a hard deny regardless of `fail_open`.**
+            Do not retry — the token is genuinely suspicious.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+              example:
+                detail: "replay_detected"
+
+  /health:
+    get:
+      operationId: health
+      summary: Service health check
+      description: Added in Phase 6B.
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["ok"]
+              example:
+                status: "ok"
+
+  /metrics:
+    get:
+      operationId: metrics
+      summary: Prometheus metrics
+      description: |
+        Prometheus text-format exposition. Added in Phase 11.
+        Scraped by Prometheus every 15 seconds.
+
+        Key metrics exposed:
+        - `aztdp_risk_evaluations_total` (counter, labels: service)
+        - `aztdp_risk_score_histogram` (histogram, buckets: 0.1–1.0)
+        - `aztdp_replay_detections_total` (counter)
+        - `aztdp_request_latency_seconds` (histogram, labels: endpoint)
+      responses:
+        "200":
+          description: Prometheus text format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  schemas:
+    RiskRequest:
+      type: object
+      required: [request_id, token_jti_hash, endpoint, timestamp]
+      properties:
+        request_id:
+          type: string
+          description: Correlation ID — same value as sent to the policy gateway
+          example: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+        session_id:
+          type: string
+          nullable: true
+          description: Keycloak session ID (`sid` claim or `session_state`)
+          example: "sess-abc123"
+        user_id:
+          type: string
+          nullable: true
+          description: Keycloak subject (`sub` claim)
+          example: "user-42"
+        token_jti_hash:
+          type: string
+          description: SHA-256 hex digest of the JWT `jti` claim.
+            Used as the Redis key for last-seen state.
+          example: "a3f5c2d1e4b6c8d9..."
+        ip:
+          type: string
+          nullable: true
+          description: Client IP from X-Client-Ip header (or REMOTE_ADDR fallback).
+            Warning — this header is user-controllable if no reverse proxy is enforcing it.
+          example: "203.0.113.10"
+        geo:
+          type: string
+          nullable: true
+          description: Geographic region from X-Geo header (e.g. "US-CA", "GB-LDN").
+            Warning — this header is user-controllable.
+          example: "US-CA"
+        user_agent_hash:
+          type: string
+          nullable: true
+          description: SHA-256 hex digest of the User-Agent header value.
+            Used for device fingerprinting without storing the raw UA string.
+          example: "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069"
+        endpoint:
+          $ref: "#/components/schemas/Endpoint"
+        timestamp:
+          type: string
+          format: date-time
+          description: ISO-8601 UTC timestamp of the original request
+          example: "2026-05-03T14:30:00.000Z"
+
+    Endpoint:
+      type: object
+      required: [service, method, path, sensitivity]
+      properties:
+        service:
+          type: string
+          enum: ["django-app", "spring-app"]
+          example: "django-app"
+        method:
+          type: string
+          enum: ["GET", "POST", "PUT", "PATCH", "DELETE"]
+          example: "GET"
+        path:
+          type: string
+          example: "/v1/payments/123"
+        sensitivity:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: |
+            Endpoint sensitivity level assigned by the calling service:
+            - 1: public (no auth required)
+            - 2: default (any authenticated user)
+            - 3: sensitive POST operations
+            - 4: high sensitivity (payments, PII)
+            - 5: critical (admin operations)
+          example: 4
+
+    RiskResponse:
+      type: object
+      required: [risk_score, trust_score, reasons, ttl_seconds]
+      properties:
+        risk_score:
+          type: number
+          format: double
+          minimum: 0.0
+          maximum: 1.0
+          description: Aggregate behavioral risk score for this request
+          example: 0.45
+        trust_score:
+          type: number
+          format: double
+          minimum: 0.0
+          maximum: 1.0
+          description: "Always: 1.0 - risk_score"
+          example: 0.55
+        anomaly_score:
+          type: number
+          format: double
+          minimum: 0.0
+          maximum: 1.0
+          description: |
+            Isolation Forest anomaly score from the anomaly service.
+            **Phase 7 only** — absent from responses until the anomaly
+            service is deployed. Callers must default to 0.0 when absent.
+          example: 0.12
+        reasons:
+          type: array
+          description: Which scoring rules fired, with their individual weights
+          items:
+            $ref: "#/components/schemas/RiskReason"
+        ttl_seconds:
+          type: integer
+          description: Access token TTL used for Redis key expiry. Informational only.
+          example: 1800
+
+    RiskReason:
+      type: object
+      required: [code, weight]
+      properties:
+        code:
+          type: string
+          enum:
+            - HIGH_SENSITIVITY
+            - IP_GEO_DRIFT
+            - NEW_DEVICE
+            - GEO_DRIFT
+          description: |
+            - `HIGH_SENSITIVITY`: endpoint.sensitivity >= 4
+            - `IP_GEO_DRIFT`: IP address changed from last seen
+            - `NEW_DEVICE`: user_agent_hash changed from last seen
+            - `GEO_DRIFT`: geo changed from last seen
+          example: "IP_GEO_DRIFT"
+        weight:
+          type: number
+          format: double
+          description: The weight this reason contributed to the total risk score
+          example: 0.35
+
+    ErrorDetail:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: "replay_detected"

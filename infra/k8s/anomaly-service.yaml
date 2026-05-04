@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anomaly-service
+  namespace: aztdp
+  labels: {app: anomaly-service}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: anomaly-service}
+  template:
+    metadata:
+      labels: {app: anomaly-service}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      containers:
+        - name: anomaly-service
+          image: aztdp/anomaly-service:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8080}]
+          envFrom:
+            - configMapRef: {name: aztdp-config}
+          resources:
+            requests: {cpu: "200m", memory: "512Mi"}
+            limits:   {cpu: "1000m", memory: "1Gi"}
+          volumeMounts:
+            - name: model-cache
+              mountPath: /app/models
+          livenessProbe:
+            httpGet: {path: /health, port: 8080}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 5
+          readinessProbe:
+            httpGet: {path: /health, port: 8080}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: model-cache
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anomaly-service
+  namespace: aztdp
+spec:
+  selector: {app: anomaly-service}
+  ports: [{port: 8080, targetPort: 8080}]

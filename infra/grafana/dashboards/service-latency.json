@@ -1,0 +1,57 @@
+{
+  "title": "AZTDP — Service Latency",
+  "uid": "aztdp-latency",
+  "schemaVersion": 39,
+  "tags": ["aztdp"],
+  "timezone": "browser",
+  "time": {"from": "now-1h", "to": "now"},
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Risk eval p50/p95/p99",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(aztdp_risk_eval_latency_seconds_bucket[5m])))", "legendFormat": "p50"},
+        {"expr": "histogram_quantile(0.95, sum by (le) (rate(aztdp_risk_eval_latency_seconds_bucket[5m])))", "legendFormat": "p95"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(aztdp_risk_eval_latency_seconds_bucket[5m])))", "legendFormat": "p99"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "id": 2,
+      "title": "OPA call latency p95",
+      "type": "timeseries",
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum by (le) (rate(aztdp_opa_request_latency_seconds_bucket[5m])))"
+      }],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "id": 3,
+      "title": "Anomaly inference p95",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum by (le) (rate(aztdp_model_inference_latency_seconds_bucket[5m])))"
+      }],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "id": 4,
+      "title": "Telemetry ingest p95",
+      "type": "timeseries",
+      "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum by (le) (rate(aztdp_telemetry_ingest_latency_seconds_bucket[5m])))"
+      }],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    }
+  ]
+}

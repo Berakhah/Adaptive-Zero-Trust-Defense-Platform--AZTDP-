@@ -1,0 +1,14 @@
+D:\Project\Adaptive Zero-Trust Defense Platform (AZTDP)\services\spring-app\src\main\java\com\aztdp\springapp\AztdpSpringAppApplication.java
+D:\Project\Adaptive Zero-Trust Defense Platform (AZTDP)\services\spring-app\src\main\java\com\aztdp\springapp\client\PolicyClient.java
+D:\Project\Adaptive Zero-Trust Defense Platform (AZTDP)\services\spring-app\src\main\java\com\aztdp\springapp\client\RiskClient.java
+D:\Project\Adaptive Zero-Trust Defense Platform (AZTDP)\services\spring-app\src\main\java\com\aztdp\springapp\client\TokenRevocationClient.java
+D:\Project\Adaptive Zero-Trust Defense Platform (AZTDP)\services\spring-app\src\main\java\com\aztdp\springapp\config\AztdpProperties.java
+D:\Project\Adaptive Zero-Trust Defense Platform (AZTDP)\services\spring-app\src\main\java\com\aztdp\springapp\config\RestClientConfig.java
+D:\Project\Adaptive Zero-Trust Defense Platform (AZTDP)\services\spring-app\src\main\java\com\aztdp\springapp\controller\HealthController.java
+D:\Project\Adaptive Zero-Trust Defense Platform (AZTDP)\services\spring-app\src\main\java\com\aztdp\springapp\controller\PaymentsController.java
+D:\Project\Adaptive Zero-Trust Defense Platform (AZTDP)\services\spring-app\src\main\java\com\aztdp\springapp\model\PolicyDecision.java
+D:\Project\Adaptive Zero-Trust Defense Platform (AZTDP)\services\spring-app\src\main\java\com\aztdp\springapp\model\PolicyInput.java
+D:\Project\Adaptive Zero-Trust Defense Platform (AZTDP)\services\spring-app\src\main\java\com\aztdp\springapp\model\RiskRequest.java
+D:\Project\Adaptive Zero-Trust Defense Platform (AZTDP)\services\spring-app\src\main\java\com\aztdp\springapp\model\RiskResponse.java
+D:\Project\Adaptive Zero-Trust Defense Platform (AZTDP)\services\spring-app\src\main\java\com\aztdp\springapp\security\RiskEnforcementFilter.java
+D:\Project\Adaptive Zero-Trust Defense Platform (AZTDP)\services\spring-app\src\main\java\com\aztdp\springapp\security\SecurityConfig.java

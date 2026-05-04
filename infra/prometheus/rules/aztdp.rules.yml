@@ -1,0 +1,96 @@
+groups:
+  - name: aztdp.security
+    interval: 30s
+    rules:
+
+      # High rate of anomaly flags — possible attack in progress
+      - alert: AnomalyFlagRateHigh
+        expr: rate(aztdp_anomaly_flagged_total[1m]) > 5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Anomaly flag rate > 5/min"
+          description: "More than 5 requests/min are being flagged as anomalous. Current rate: {{ $value | humanize }}/s"
+
+      # High rate of policy denials — possible brute-force or misconfiguration
+      - alert: PolicyDenyRateHigh
+        expr: rate(aztdp_policy_decisions_total{decision="deny"}[1m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Policy deny rate > 10/min"
+          description: "More than 10 requests/min are being denied by OPA policy. Current rate: {{ $value | humanize }}/s"
+
+      # Sustained token revocations — may indicate token theft campaign
+      - alert: TokenRevocationBurst
+        expr: rate(aztdp_token_revocations_total[5m]) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Token revocation rate > 2/min (5m window)"
+          description: "Elevated token revocation rate may indicate a token theft campaign. Rate: {{ $value | humanize }}/s"
+
+  - name: aztdp.latency
+    interval: 30s
+    rules:
+
+      # Risk evaluation p99 > 500ms — SLA breach risk
+      - alert: RiskEvalLatencyHigh
+        expr: histogram_quantile(0.99, rate(aztdp_risk_eval_duration_seconds_bucket[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Risk eval p99 latency > 500ms"
+          description: "99th percentile risk evaluation latency is {{ $value | humanizeDuration }}. May impact user experience."
+
+      # Anomaly inference p99 > 200ms
+      - alert: AnomalyInferenceLatencyHigh
+        expr: histogram_quantile(0.99, rate(aztdp_model_inference_latency_seconds_bucket[5m])) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Anomaly inference p99 > 200ms"
+          description: "99th percentile anomaly model inference latency is {{ $value | humanizeDuration }}."
+
+  - name: aztdp.model
+    interval: 60s
+    rules:
+
+      # Model not retrained in 24 hours — baseline drift risk
+      - alert: AnomalyModelStale
+        expr: (time() - aztdp_model_training_samples_total) > 86400
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Anomaly model not retrained in 24h"
+          description: "The anomaly detection model version {{ $labels.version }} has not been updated in over 24 hours. Trigger a retrain via POST /v1/anomaly/retrain."
+
+      # Model anomaly rate > 50% — likely miscalibrated after retrain
+      - alert: AnomalyModelHighFalsePositiveRate
+        expr: aztdp_model_training_anomaly_rate > 0.5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Anomaly model flagging > 50% of training samples"
+          description: "Model {{ $labels.version }} has an anomaly rate of {{ $value | humanizePercentage }} on training data. The model may be miscalibrated."
+
+  - name: aztdp.availability
+    interval: 30s
+    rules:
+
+      # Any service returning 5xx
+      - alert: ServiceErrorRateHigh
+        expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} error rate > 5%"
+          description: "Service {{ $labels.job }} is returning 5xx errors at {{ $value | humanizePercentage }} of requests."

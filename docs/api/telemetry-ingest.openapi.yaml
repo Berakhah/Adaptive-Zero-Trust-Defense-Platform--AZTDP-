@@ -1,0 +1,290 @@
+openapi: "3.1.0"
+
+info:
+  title: AZTDP Telemetry Ingest
+  version: "1.0.0"
+  description: |
+    Central event persistence service. All AZTDP services emit audit events
+    here via fire-and-forget HTTP calls. Telemetry-ingest writes to PostgreSQL
+    and exposes Prometheus metrics.
+
+    **Implemented in Phase 11.**
+
+    **Write path per event:**
+    1. Validate event schema (Pydantic)
+    2. Write raw row to `audit_events` (always)
+    3. Denormalize to `risk_evaluations` (if `event_type=risk_eval`)
+    4. Denormalize to `policy_decisions` (if `event_type=policy_decision`)
+    5. Upsert into `sessions` (update `last_seen_at`, `risk_max`, `decision_counts`)
+    6. Write to `token_revocations` (if `event_type=token_revocation`)
+    7. Increment Prometheus counter `aztdp_events_ingested_total`
+
+    **Performance:** Uses `psycopg_pool.AsyncConnectionPool` (min=2, max=10).
+    Target write latency: <10ms at p99. Fire-and-forget callers use 100ms timeout;
+    this service should never be on the critical path.
+
+    **Internal service** — not exposed to external clients. Reachable at
+    `http://telemetry-ingest:8080` within the `aztdp` Docker network.
+
+servers:
+  - url: http://localhost:8003
+    description: Dev (docker-compose host port)
+  - url: http://telemetry-ingest:8080
+    description: Internal (container network)
+
+tags:
+  - name: telemetry
+    description: Event ingestion
+
+paths:
+  /v1/telemetry/event:
+    post:
+      operationId: ingestEvent
+      tags: [telemetry]
+      summary: Ingest an audit event
+      description: |
+        Accepts a single structured audit event and persists it to PostgreSQL.
+        Returns immediately after validation; DB write is async in the same
+        coroutine (not deferred to a queue).
+
+        **Callers and their event types:**
+
+        | Service | event_type |
+        |---|---|
+        | Gateway | `policy_decision` |
+        | Risk Engine | `risk_eval` |
+        | Anomaly Service | `anomaly_score` |
+        | Gateway (on revoke) | `token_revocation` |
+
+        **Idempotency:** There is no deduplication. If a caller retries (e.g.,
+        after a timeout), a duplicate row may appear in `audit_events`. The
+        `event_id` UUID can be used by consumers to deduplicate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TelemetryEvent"
+            examples:
+              risk_eval:
+                summary: Risk evaluation event from risk-engine
+                value:
+                  event_type: "risk_eval"
+                  service: "risk-engine"
+                  request_id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                  session_id: "sess-abc123"
+                  user_id: "user-42"
+                  token_jti_hash: "a3f5c2d1e4b6..."
+                  ip: "203.0.113.10"
+                  geo: "US-CA"
+                  payload:
+                    risk_score: 0.10
+                    trust_score: 0.90
+                    anomaly_score: 0.08
+                    reasons: []
+                    endpoint_path: "/v1/payments/123"
+                    endpoint_method: "GET"
+                    sensitivity: 4
+              policy_decision:
+                summary: Policy decision event from gateway
+                value:
+                  event_type: "policy_decision"
+                  service: "gateway"
+                  request_id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                  session_id: "sess-abc123"
+                  user_id: "user-42"
+                  token_jti_hash: "a3f5c2d1e4b6..."
+                  ip: "203.0.113.10"
+                  geo: "US-CA"
+                  payload:
+                    decision: "allow"
+                    rule: "low_risk_allow"
+                    risk_score: 0.10
+                    anomaly_score: 0.08
+                    endpoint_path: "/v1/payments/123"
+              token_revocation:
+                summary: Token revocation event
+                value:
+                  event_type: "token_revocation"
+                  service: "gateway"
+                  request_id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+                  session_id: "sess-abc123"
+                  user_id: "user-42"
+                  token_jti_hash: "a3f5c2d1e4b6..."
+                  payload:
+                    reason: "very_high_risk"
+                    source: "policy"
+              anomaly_score:
+                summary: Anomaly score event from anomaly-service
+                value:
+                  event_type: "anomaly_score"
+                  service: "anomaly-service"
+                  request_id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                  session_id: "sess-abc123"
+                  user_id: "user-42"
+                  token_jti_hash: "a3f5c2d1e4b6..."
+                  payload:
+                    anomaly_score: 0.08
+                    is_anomalous: false
+                    model_version: "v1.0"
+                    confidence: 0.97
+      responses:
+        "200":
+          description: Event accepted and persisted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelemetryEventResponse"
+              example:
+                event_id: "550e8400-e29b-41d4-a716-446655440000"
+                status: "accepted"
+        "422":
+          description: |
+            Validation error — unknown `event_type` or missing required field.
+            Callers should log and discard (do not retry validation errors).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationError"
+
+  /health:
+    get:
+      operationId: health
+      summary: Service health check
+      description: Returns 200 when PostgreSQL connection pool is healthy.
+        Returns 503 if the pool cannot acquire a connection.
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    enum: ["ok"]
+              example:
+                status: "ok"
+        "503":
+          description: Database connection pool unhealthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  detail:
+                    type: string
+              example:
+                status: "error"
+                detail: "connection pool exhausted"
+
+  /metrics:
+    get:
+      operationId: metrics
+      summary: Prometheus metrics
+      description: |
+        Key metrics:
+        - `aztdp_events_ingested_total` (counter, labels: event_type, service)
+        - `aztdp_db_write_latency_seconds` (histogram)
+        - `aztdp_db_pool_size` (gauge, labels: state=idle|active)
+      responses:
+        "200":
+          description: Prometheus text format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  schemas:
+    TelemetryEvent:
+      type: object
+      required: [event_type, service, payload]
+      properties:
+        event_type:
+          type: string
+          enum: ["risk_eval", "policy_decision", "token_revocation", "anomaly_score"]
+          description: Determines which denormalized table is also written
+          example: "policy_decision"
+        service:
+          type: string
+          description: Name of the emitting service
+          enum: ["gateway", "risk-engine", "anomaly-service", "django-app", "spring-app"]
+          example: "gateway"
+        request_id:
+          type: string
+          nullable: true
+          description: Correlation ID linking this event to risk_eval and policy_decision events
+          example: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+        session_id:
+          type: string
+          nullable: true
+          description: Keycloak session ID (used to group events in forensics replay)
+          example: "sess-abc123"
+        user_id:
+          type: string
+          nullable: true
+          description: Keycloak subject (`sub`)
+          example: "user-42"
+        token_jti_hash:
+          type: string
+          nullable: true
+          description: SHA-256 hex digest of JTI
+          example: "a3f5c2d1e4b6..."
+        ip:
+          type: string
+          nullable: true
+          example: "203.0.113.10"
+        geo:
+          type: string
+          nullable: true
+          example: "US-CA"
+        payload:
+          type: object
+          description: |
+            Event-type-specific data. Stored verbatim in `audit_events.payload` (JSONB).
+            Also parsed for denormalized table writes:
+
+            - `risk_eval`: expects `risk_score`, `trust_score`, `anomaly_score`,
+              `reasons`, `endpoint_path`, `endpoint_method`, `sensitivity`
+            - `policy_decision`: expects `decision`, `rule`, `risk_score`,
+              `anomaly_score`, `endpoint_path`
+            - `token_revocation`: expects `reason`, `source`
+            - `anomaly_score`: expects `anomaly_score`, `is_anomalous`, `model_version`
+          example:
+            decision: "allow"
+            rule: "low_risk_allow"
+
+    TelemetryEventResponse:
+      type: object
+      required: [event_id, status]
+      properties:
+        event_id:
+          type: string
+          format: uuid
+          description: UUID generated for the `audit_events` row. Can be used
+            for deduplication by consumers.
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        status:
+          type: string
+          enum: ["accepted"]
+
+    ValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  type: string
+              msg:
+                type: string
+              type:
+                type: string

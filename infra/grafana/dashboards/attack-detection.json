@@ -1,0 +1,56 @@
+{
+  "title": "AZTDP — Attack Detection",
+  "uid": "aztdp-attacks",
+  "schemaVersion": 39,
+  "tags": ["aztdp", "security"],
+  "timezone": "browser",
+  "time": {"from": "now-6h", "to": "now"},
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Replay events (last 6h)",
+      "type": "stat",
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "sum(increase(aztdp_replay_detected_total[6h]))"}]
+    },
+    {
+      "id": 2,
+      "title": "ML anomalies flagged (last 6h)",
+      "type": "stat",
+      "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "sum(increase(aztdp_anomaly_flagged_total[6h]))"}]
+    },
+    {
+      "id": 3,
+      "title": "Tokens revoked (last 6h)",
+      "type": "stat",
+      "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "sum(increase(aztdp_token_revocations_total[6h]))"}]
+    },
+    {
+      "id": 4,
+      "title": "Step-up challenges (last 6h)",
+      "type": "stat",
+      "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "sum(increase(aztdp_policy_decisions_total{decision=\"stepup\"}[6h]))"}]
+    },
+    {
+      "id": 5,
+      "title": "Attack signal timeline",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 4, "w": 24, "h": 10},
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {"expr": "rate(aztdp_replay_detected_total[1m])", "legendFormat": "replay"},
+        {"expr": "rate(aztdp_anomaly_flagged_total[1m])", "legendFormat": "anomaly"},
+        {"expr": "rate(aztdp_policy_decisions_total{decision=\"deny\"}[1m])", "legendFormat": "deny"},
+        {"expr": "rate(aztdp_policy_decisions_total{decision=\"stepup\"}[1m])", "legendFormat": "stepup"}
+      ]
+    }
+  ]
+}

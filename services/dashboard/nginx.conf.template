@@ -1,0 +1,118 @@
+worker_processes auto;
+events { worker_connections 1024; }
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+    sendfile      on;
+    keepalive_timeout 65;
+    gzip on;
+    gzip_types text/html text/css application/javascript application/json;
+
+    server {
+        listen 8099;
+        server_name _;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        add_header X-Frame-Options SAMEORIGIN always;
+        add_header X-Content-Type-Options nosniff always;
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+
+        # Attack-sim SSE proxy (buffering disabled for streaming)
+        location /api/sim/ {
+            rewrite ^/api/sim/(.*) /$1 break;
+            proxy_pass http://attack-sim:8090;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_read_timeout 3600s;
+            chunked_transfer_encoding on;
+        }
+
+        # Forensics (no auth required)
+        location /api/forensics/ {
+            rewrite ^/api/forensics/(.*) /$1 break;
+            proxy_pass http://forensics:8080;
+            proxy_set_header Host $host;
+        }
+
+        # Prometheus
+        location /api/prometheus/ {
+            rewrite ^/api/prometheus/(.*) /$1 break;
+            proxy_pass http://prometheus:9090;
+            proxy_set_header Host $host;
+        }
+
+        # Keycloak (management health)
+        location /api/keycloak/ {
+            rewrite ^/api/keycloak/(.*) /$1 break;
+            proxy_pass http://keycloak:9000;
+            proxy_set_header Host $host;
+        }
+
+        # OPA
+        location /api/opa/ {
+            rewrite ^/api/opa/(.*) /$1 break;
+            proxy_pass http://opa:8181;
+            proxy_set_header Host $host;
+        }
+
+        # Grafana
+        location /api/grafana/ {
+            rewrite ^/api/grafana/(.*) /$1 break;
+            proxy_pass http://grafana:3000;
+            proxy_set_header Host $host;
+        }
+
+        # Gateway (requires internal token)
+        location /api/gateway/ {
+            rewrite ^/api/gateway/(.*) /$1 break;
+            proxy_pass http://gateway:8080;
+            proxy_set_header Host $host;
+            proxy_set_header Authorization "Bearer ${AZTDP_INTERNAL_TOKEN}";
+        }
+
+        # Risk engine
+        location /api/risk/ {
+            rewrite ^/api/risk/(.*) /$1 break;
+            proxy_pass http://risk-engine:8080;
+            proxy_set_header Host $host;
+            proxy_set_header Authorization "Bearer ${AZTDP_INTERNAL_TOKEN}";
+        }
+
+        # Anomaly service
+        location /api/anomaly/ {
+            rewrite ^/api/anomaly/(.*) /$1 break;
+            proxy_pass http://anomaly-service:8080;
+            proxy_set_header Host $host;
+            proxy_set_header Authorization "Bearer ${AZTDP_INTERNAL_TOKEN}";
+        }
+
+        # Telemetry
+        location /api/telemetry/ {
+            rewrite ^/api/telemetry/(.*) /$1 break;
+            proxy_pass http://telemetry-ingest:8080;
+            proxy_set_header Host $host;
+            proxy_set_header Authorization "Bearer ${AZTDP_INTERNAL_TOKEN}";
+        }
+
+        # Django app
+        location /api/django/ {
+            rewrite ^/api/django/(.*) /$1 break;
+            proxy_pass http://django-app:8000;
+            proxy_set_header Host $host;
+        }
+
+        # Spring app
+        location /api/spring/ {
+            rewrite ^/api/spring/(.*) /$1 break;
+            proxy_pass http://spring-app:8082;
+            proxy_set_header Host $host;
+        }
+    }
+}

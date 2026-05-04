@@ -1,0 +1,4 @@
+# Never commit TLS private keys or self-signed certs
+*.key
+*.crt
+*.pem

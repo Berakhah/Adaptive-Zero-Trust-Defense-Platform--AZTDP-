@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "aztdp"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+# ── Test configuration ────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = [
+    "services/django-app/tests",
+    "services/gateway/tests",
+    "services/anomaly-service/tests",
+    "services/telemetry-ingest/tests",
+    "services/attack-sim",
+]
+python_files  = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+# Inject service roots onto sys.path so `from .module import X` resolves.
+# Each service adds itself via its own conftest.py; the root conftest handles globals.
+addopts = [
+    "--import-mode=importlib",
+    "-v",
+    "--tb=short",
+]
+
+# Allow Django tests to use sqlite in-memory by default.
+# Override via AZTDP_DB_ENGINE env if you want a real Postgres.
+[tool.pytest.env]
+AZTDP_DB_ENGINE = "django.db.backends.sqlite3"
+AZTDP_DB_NAME   = ":memory:"
+AZTDP_SECRET_KEY = "test-secret"
+DJANGO_SETTINGS_MODULE = "aztdp_django.settings"
+
+# ── Coverage ──────────────────────────────────────────────────────────────────
+[tool.coverage.run]
+source = [
+    "services/django-app",
+    "services/gateway",
+    "services/anomaly-service",
+    "services/telemetry-ingest",
+]
+omit = ["*/tests/*", "*/__pycache__/*", "*/migrations/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 40

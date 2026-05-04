@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aztdp-config
+  namespace: aztdp
+data:
+  AZTDP_OPA_URL: "http://opa:8181"
+  AZTDP_REDIS_URL: "redis://redis:6379/0"
+  AZTDP_DB_URL: "postgresql://aztdp:aztdp@postgres:5432/aztdp"
+  AZTDP_RISK_ENGINE_URL: "http://risk-engine:8080"
+  AZTDP_POLICY_GATEWAY_URL: "http://gateway:8080"
+  AZTDP_TOKEN_REVOKE_URL: "http://gateway:8080/v1/tokens/revoke"
+  AZTDP_ANOMALY_URL: "http://anomaly-service:8080"
+  AZTDP_TELEMETRY_URL: "http://telemetry-ingest:8080"
+  AZTDP_OIDC_ISSUER: "http://keycloak:8080/realms/aztdp"
+  AZTDP_JWKS_URL: "http://keycloak:8080/realms/aztdp/protocol/openid-connect/certs"
+  AZTDP_AUDIENCE: "aztdp-api"
+  AZTDP_FAIL_OPEN: "false"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aztdp-secrets
+  namespace: aztdp
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: "aztdp"
+  KEYCLOAK_ADMIN_PASSWORD: "admin"
+  AZTDP_SECRET_KEY: "change-me-in-prod"

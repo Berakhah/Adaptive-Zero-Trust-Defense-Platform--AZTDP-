@@ -1,0 +1,426 @@
+openapi: "3.1.0"
+
+info:
+  title: AZTDP Policy Gateway
+  version: "1.0.0"
+  description: |
+    Policy decision proxy. App services send all authorization requests here.
+    The gateway performs two pre-OPA checks (token revocation, fail-open/closed
+    configuration), calls OPA, logs the decision, and returns a structured action.
+
+    **Internal service** — not exposed to external clients. Reachable at
+    `http://gateway:8080` within the `aztdp` Docker network.
+
+servers:
+  - url: http://localhost:8000
+    description: Dev (docker-compose host port)
+  - url: http://gateway:8080
+    description: Internal (container network)
+
+tags:
+  - name: policy
+    description: Authorization decision endpoints
+  - name: revocation
+    description: Token revocation management
+
+paths:
+  /v1/policy/decision:
+    post:
+      operationId: policyDecision
+      tags: [policy]
+      summary: Evaluate an authorization request
+      description: |
+        Core enforcement endpoint. The calling app service passes the fully-formed
+        `input` object; the gateway:
+
+        1. Checks if `context.token_jti_hash` is in the revocation store — if yes,
+           returns `decision=revoke` immediately without calling OPA.
+        2. Calls OPA at `POST /v1/data/aztdp/authz/decision` with `{input: ...}`.
+        3. Logs the decision (stdout JSON, fire-and-forget telemetry in Phase 11).
+        4. Returns the structured decision.
+
+        **Timeout behaviour:** If OPA is unreachable and `AZTDP_FAIL_OPEN=false`
+        (production default), returns HTTP 503. If `AZTDP_FAIL_OPEN=true` (dev),
+        returns `decision=allow` with `reason.rule=fail_open`.
+
+        **Latency budget:** Callers set a 800ms read timeout. OPA evaluates in <5ms;
+        the gateway overhead is <10ms.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PolicyDecisionRequest"
+            examples:
+              normal_user_payment:
+                summary: Low-risk user accessing payments
+                value:
+                  input:
+                    request_id: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                    subject:
+                      user_id: "user-42"
+                      roles: ["user"]
+                      session_trust: 0.90
+                    resource:
+                      service: "django-app"
+                      method: "GET"
+                      path: "/v1/payments/123"
+                      sensitivity: 4
+                    context:
+                      risk_score: 0.10
+                      anomaly_score: 0.08
+                      ip: "203.0.113.10"
+                      geo: "US-CA"
+                      token_jti_hash: "a3f5c2d1e4b6..."
+                      is_token_revoked: false
+              high_risk_admin:
+                summary: High-risk request to admin endpoint
+                value:
+                  input:
+                    request_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                    subject:
+                      user_id: "user-99"
+                      roles: ["user"]
+                      session_trust: 0.20
+                    resource:
+                      service: "spring-app"
+                      method: "GET"
+                      path: "/v1/admin/users"
+                      sensitivity: 5
+                    context:
+                      risk_score: 0.85
+                      anomaly_score: 0.72
+                      ip: "198.51.100.55"
+                      geo: "CN-SHA"
+                      token_jti_hash: "b4e7f1a2c3d5..."
+                      is_token_revoked: false
+      responses:
+        "200":
+          description: Decision evaluated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyDecisionResponse"
+              examples:
+                allow:
+                  value:
+                    decision:
+                      decision: "allow"
+                      reason:
+                        rule: "low_risk_allow"
+                deny:
+                  value:
+                    decision:
+                      decision: "deny"
+                      reason:
+                        rule: "very_high_risk"
+                stepup:
+                  value:
+                    decision:
+                      decision: "stepup"
+                      reason:
+                        rule: "high_risk_stepup"
+                        challenge_id: "chal-uuid-here"
+                revoke:
+                  value:
+                    decision:
+                      decision: "revoke"
+                      reason:
+                        rule: "token_revoked"
+        "503":
+          description: |
+            OPA is unreachable and `AZTDP_FAIL_OPEN=false`. The calling service
+            should treat this as a deny (fail-closed). Never returned when
+            `AZTDP_FAIL_OPEN=true`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+              example:
+                detail: "policy_unavailable"
+
+  /v1/policy/version:
+    get:
+      operationId: policyVersion
+      tags: [policy]
+      summary: Current OPA policy version
+      description: Returns the loaded policy version and bundle hash. Used by
+        CI health checks to confirm the correct policy bundle is active.
+      responses:
+        "200":
+          description: Policy version info
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, bundle_hash]
+                properties:
+                  version:
+                    type: string
+                    example: "dev"
+                  bundle_hash:
+                    type: string
+                    example: ""
+
+  /v1/tokens/revoke:
+    post:
+      operationId: revokeToken
+      tags: [revocation]
+      summary: Revoke a token by its JTI hash
+      description: |
+        Adds `token_jti_hash` to the revocation store (in-memory + Redis in
+        Phase 6B). Subsequent `POST /v1/policy/decision` calls for the same
+        hash return `decision=revoke` without calling OPA.
+
+        Called by app service middlewares when OPA returns `decision=revoke`, or
+        by an administrative action.
+
+        **Idempotent:** Revoking an already-revoked hash is a no-op.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevokeRequest"
+            example:
+              token_jti_hash: "a3f5c2d1e4b6..."
+              reason: "very_high_risk"
+              source: "policy"
+      responses:
+        "200":
+          description: Token revoked (or was already revoked)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    enum: ["revoked"]
+              example:
+                status: "revoked"
+
+  /v1/tokens/revoked/{token_jti_hash}:
+    get:
+      operationId: isTokenRevoked
+      tags: [revocation]
+      summary: Check whether a token is revoked
+      description: |
+        Read-only check against the revocation store. Used by forensics and
+        administrative tooling. App services do not call this directly — the
+        gateway checks revocation internally on every `POST /v1/policy/decision`.
+      parameters:
+        - name: token_jti_hash
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 64
+            maxLength: 64
+            description: SHA-256 hex digest of the JWT `jti` claim
+          example: "a3f5c2d1e4b6c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3"
+      responses:
+        "200":
+          description: Revocation status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [revoked]
+                properties:
+                  revoked:
+                    type: boolean
+              examples:
+                not_revoked:
+                  value: { revoked: false }
+                revoked:
+                  value: { revoked: true }
+
+  /health:
+    get:
+      operationId: health
+      summary: Service health check
+      description: Returns 200 when the service is ready. Used by docker-compose
+        `condition: service_healthy` and Kubernetes liveness/readiness probes.
+        Added in Phase 6B.
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["ok"]
+              example:
+                status: "ok"
+
+components:
+  schemas:
+    PolicyDecisionRequest:
+      type: object
+      required: [input]
+      properties:
+        input:
+          type: object
+          required: [request_id, subject, resource, context]
+          properties:
+            request_id:
+              type: string
+              format: uuid
+              description: Unique ID for this request, for correlation across services
+            subject:
+              $ref: "#/components/schemas/Subject"
+            resource:
+              $ref: "#/components/schemas/Resource"
+            context:
+              $ref: "#/components/schemas/RequestContext"
+
+    Subject:
+      type: object
+      required: [user_id, roles, session_trust]
+      properties:
+        user_id:
+          type: string
+          description: Keycloak `sub` claim (UUID)
+          example: "user-42"
+        roles:
+          type: array
+          items:
+            type: string
+          description: From `realm_access.roles` JWT claim
+          example: ["user"]
+        session_trust:
+          type: number
+          format: double
+          minimum: 0.0
+          maximum: 1.0
+          description: trust_score from the risk engine (1 - risk_score)
+          example: 0.90
+
+    Resource:
+      type: object
+      required: [service, method, path, sensitivity]
+      properties:
+        service:
+          type: string
+          description: Originating service name
+          enum: ["django-app", "spring-app"]
+          example: "django-app"
+        method:
+          type: string
+          description: HTTP method
+          enum: ["GET", "POST", "PUT", "PATCH", "DELETE"]
+          example: "GET"
+        path:
+          type: string
+          description: Request path
+          example: "/v1/payments/123"
+        sensitivity:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: |
+            Endpoint sensitivity level:
+            1=public, 2=default, 3=sensitive POST, 4=high (payments), 5=critical (admin)
+          example: 4
+
+    RequestContext:
+      type: object
+      required: [risk_score, ip, geo, token_jti_hash, is_token_revoked]
+      properties:
+        risk_score:
+          type: number
+          format: double
+          minimum: 0.0
+          maximum: 1.0
+          description: Output of the risk engine
+          example: 0.10
+        anomaly_score:
+          type: number
+          format: double
+          minimum: 0.0
+          maximum: 1.0
+          description: Output of the anomaly service (Phase 7). Defaults to 0.0 when
+            anomaly service is unavailable or not yet deployed.
+          default: 0.0
+          example: 0.08
+        ip:
+          type: string
+          description: Client IP address from X-Client-Ip header (or REMOTE_ADDR fallback)
+          example: "203.0.113.10"
+        geo:
+          type: string
+          description: Geographic region from X-Geo header
+          example: "US-CA"
+        token_jti_hash:
+          type: string
+          description: SHA-256 hex digest of the JWT `jti` claim
+          example: "a3f5c2d1e4b6..."
+        is_token_revoked:
+          type: boolean
+          description: Always false from app services — gateway performs its own revocation
+            check. Reserved for future use when app services have a local revocation cache.
+          default: false
+
+    PolicyDecisionResponse:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: object
+          required: [decision]
+          properties:
+            decision:
+              type: string
+              enum: ["allow", "deny", "stepup", "revoke"]
+              description: |
+                - `allow`: proceed to handler
+                - `deny`: return 403
+                - `stepup`: return 401 with MFA challenge
+                - `revoke`: revoke token and return 403
+            reason:
+              type: object
+              description: Context from OPA about which rule fired
+              properties:
+                rule:
+                  type: string
+                  enum:
+                    - low_risk_allow
+                    - high_risk_stepup
+                    - very_high_risk
+                    - admin_required
+                    - token_revoked
+                    - fail_open
+                    - invalid_response
+                  example: "low_risk_allow"
+                challenge_id:
+                  type: string
+                  format: uuid
+                  description: Present only when decision=stepup
+
+    RevokeRequest:
+      type: object
+      required: [token_jti_hash, reason, source]
+      properties:
+        token_jti_hash:
+          type: string
+          description: SHA-256 hex digest of the JWT `jti` claim
+        reason:
+          type: string
+          description: Human-readable reason for revocation
+          example: "very_high_risk"
+        source:
+          type: string
+          enum: ["policy", "admin", "session_end", "manual"]
+          description: Which system component triggered the revocation
+          example: "policy"
+
+    ErrorDetail:
+      type: object
+      properties:
+        detail:
+          type: string
+          example: "policy_unavailable"
