@@ -18,6 +18,8 @@ const CFG = {
   EVENT_FETCH_LIMIT: 200,
   ANM_HISTORY: 24,
   HEALTH_TIMEOUT: 3500,
+  TELEMETRY_FRESH_MS: 60000,
+  TELEMETRY_ACTIVE_MS: 300000,
 };
 
 const SERVICES = [
@@ -264,10 +266,10 @@ export default function App() {
       return { label: 'No telemetry', detail: 'Awaiting event ingest', tone: 'muted' };
     }
     const diff = Date.now() - new Date(latestEventAt).getTime();
-    if (diff < 60000) {
+    if (diff < CFG.TELEMETRY_FRESH_MS) {
       return { label: 'Live', detail: `Last event ${relTime(latestEventAt)}`, tone: 'good' };
     }
-    if (diff < 300000) {
+    if (diff < CFG.TELEMETRY_ACTIVE_MS) {
       return { label: 'Active', detail: `Last event ${relTime(latestEventAt)}`, tone: 'warn' };
     }
     return { label: 'Delayed', detail: `Last event ${relTime(latestEventAt)}`, tone: 'alert' };
@@ -683,7 +685,7 @@ export default function App() {
           <div className="brand-icon" />
           <div>
             <div className="brand-title">AZTDP</div>
-            <div className="brand-sub">Adaptive Zero-Trust SOC</div>
+            <div className="brand-sub">Adaptive Zero Trust SOC</div>
           </div>
         </div>
 
