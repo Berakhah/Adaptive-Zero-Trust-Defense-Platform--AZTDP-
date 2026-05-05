@@ -104,6 +104,8 @@ const shortId = (id, n = 8) => {
   return id.length > n ? `${id.slice(0, n)}...` : id;
 };
 
+const windowLabel = (ms) => `<${Math.round(ms / 60000)}m`;
+
 const riskColor = (score) => {
   if (score == null) return 'var(--muted)';
   if (score >= 0.8) return 'var(--red)';
@@ -265,12 +267,14 @@ export default function App() {
     if (!latestEventAt) {
       return { label: 'No telemetry', detail: 'Awaiting event ingest', tone: 'muted' };
     }
+    const liveWindow = windowLabel(CFG.TELEMETRY_LIVE_WINDOW_MS);
+    const activeWindow = windowLabel(CFG.TELEMETRY_ACTIVE_WINDOW_MS);
     const diff = Date.now() - new Date(latestEventAt).getTime();
     if (diff < CFG.TELEMETRY_LIVE_WINDOW_MS) {
-      return { label: 'Live (<1m)', detail: `Last event ${relTime(latestEventAt)}`, tone: 'good' };
+      return { label: `Live (${liveWindow})`, detail: `Last event ${relTime(latestEventAt)}`, tone: 'good' };
     }
     if (diff < CFG.TELEMETRY_ACTIVE_WINDOW_MS) {
-      return { label: 'Active (<5m)', detail: `Last event ${relTime(latestEventAt)}`, tone: 'warn' };
+      return { label: `Active (${activeWindow})`, detail: `Last event ${relTime(latestEventAt)}`, tone: 'warn' };
     }
     return { label: 'Delayed', detail: `Last event ${relTime(latestEventAt)}`, tone: 'alert' };
   }, [latestEventAt]);
