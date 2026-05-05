@@ -430,6 +430,10 @@ main {
   color: var(--red);
 }
 
+.summary-metric.muted {
+  color: var(--muted);
+}
+
 .summary-sub {
   font-size: 0.7rem;
   color: var(--muted);
