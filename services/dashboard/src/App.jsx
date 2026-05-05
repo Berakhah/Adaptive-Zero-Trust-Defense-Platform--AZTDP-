@@ -18,8 +18,8 @@ const CFG = {
   EVENT_FETCH_LIMIT: 200,
   ANM_HISTORY: 24,
   HEALTH_TIMEOUT: 3500,
-  TELEMETRY_FRESH_MS: 60_000,
-  TELEMETRY_ACTIVE_MS: 5 * 60_000,
+  TELEMETRY_LIVE_WINDOW_MS: 60_000,
+  TELEMETRY_ACTIVE_WINDOW_MS: 5 * 60_000,
 };
 
 const SERVICES = [
@@ -266,11 +266,11 @@ export default function App() {
       return { label: 'No telemetry', detail: 'Awaiting event ingest', tone: 'muted' };
     }
     const diff = Date.now() - new Date(latestEventAt).getTime();
-    if (diff < CFG.TELEMETRY_FRESH_MS) {
-      return { label: 'Live', detail: `Last event ${relTime(latestEventAt)}`, tone: 'good' };
+    if (diff < CFG.TELEMETRY_LIVE_WINDOW_MS) {
+      return { label: 'Live (<1m)', detail: `Last event ${relTime(latestEventAt)}`, tone: 'good' };
     }
-    if (diff < CFG.TELEMETRY_ACTIVE_MS) {
-      return { label: 'Active', detail: `Last event ${relTime(latestEventAt)}`, tone: 'warn' };
+    if (diff < CFG.TELEMETRY_ACTIVE_WINDOW_MS) {
+      return { label: 'Active (<5m)', detail: `Last event ${relTime(latestEventAt)}`, tone: 'warn' };
     }
     return { label: 'Delayed', detail: `Last event ${relTime(latestEventAt)}`, tone: 'alert' };
   }, [latestEventAt]);
