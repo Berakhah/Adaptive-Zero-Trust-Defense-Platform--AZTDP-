@@ -27,9 +27,9 @@ def test_health():
     assert client.get("/health").status_code == 200
 
 
-def test_evaluate_returns_score_and_anomaly_field():
+def test_evaluate_returns_score_and_anomaly_field(auth_headers):
     with patch("risk_engine.app.score_anomaly", return_value=None):
-        r = client.post("/v1/risk/evaluate", json=_payload(token_jti_hash="t-fresh"))
+        r = client.post("/v1/risk/evaluate", json=_payload(token_jti_hash="t-fresh"), headers=auth_headers)
     assert r.status_code == 200
     body = r.json()
     assert "risk_score" in body
@@ -37,12 +37,17 @@ def test_evaluate_returns_score_and_anomaly_field():
     assert body["anomaly_score"] == 0.0
 
 
-def test_replay_returns_409():
+def test_replay_returns_409(auth_headers):
     # First call sets last_seen, second with different IP within window triggers replay.
     token = "t-replay"
     p1 = _payload(token_jti_hash=token, ip="1.1.1.1")
     p2 = _payload(token_jti_hash=token, ip="2.2.2.2")
     with patch("risk_engine.app.score_anomaly", return_value=None):
-        client.post("/v1/risk/evaluate", json=p1)
-        r = client.post("/v1/risk/evaluate", json=p2)
+        client.post("/v1/risk/evaluate", json=p1, headers=auth_headers)
+        r = client.post("/v1/risk/evaluate", json=p2, headers=auth_headers)
     assert r.status_code == 409
+
+
+def test_protected_route_rejects_missing_token():
+    r = client.post("/v1/risk/evaluate", json=_payload())
+    assert r.status_code == 401

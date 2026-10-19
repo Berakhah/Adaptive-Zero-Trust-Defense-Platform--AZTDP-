@@ -88,6 +88,11 @@ class TestTelemetryDrain:
 
         import gateway.telemetry as tel
 
+        # `from . import config` resolves via the package attribute, which can
+        # still hold a config module loaded by an earlier test, so set the
+        # value explicitly instead of relying on a re-import.
+        monkeypatch.setattr(tel.config, "TELEMETRY_URL", "")
+
         submitted: List[bool] = []
         original_submit = tel._executor.submit
 
@@ -95,7 +100,7 @@ class TestTelemetryDrain:
             submitted.append(True)
             return original_submit(*args, **kwargs)
 
-        tel._executor.submit = tracking_submit
+        monkeypatch.setattr(tel._executor, "submit", tracking_submit)
 
         tel.emit_async("policy_decision", {"request_id": "test-456"})
         assert not submitted, "emit_async must not submit when TELEMETRY_URL is empty"

@@ -46,7 +46,7 @@ def test_drift_flags_computed_from_last_seen(monkeypatch):
     monkeypatch.setattr(config, "ANOMALY_URL", "http://anomaly:8080")
     captured = {}
 
-    def fake_post(url, json=None, timeout=None):
+    def fake_post(url, json=None, headers=None, timeout=None):
         captured["body"] = json
         resp = MagicMock()
         resp.status_code = 200
