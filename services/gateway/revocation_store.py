@@ -34,10 +34,17 @@ class PostgresRevocationDB:
     a dead database from hanging the revoke request.
     """
 
-    def __init__(self, dsn: str, connect_timeout: int = 3, default_ttl_seconds: int = 3600) -> None:
+    def __init__(
+        self,
+        dsn: str,
+        connect_timeout: int = 3,
+        default_ttl_seconds: int = 3600,
+        exp_grace_seconds: int = 300,
+    ) -> None:
         self._dsn = dsn
         self._connect_timeout = connect_timeout
         self._default_ttl = default_ttl_seconds
+        self._grace = max(0, exp_grace_seconds)
 
     def _connect(self):
         import psycopg
@@ -62,21 +69,29 @@ class PostgresRevocationDB:
                 )
 
     def active(self) -> List[Tuple[str, Optional[int]]]:
-        """Revocations still in force, with their effective expiry (epoch seconds).
+        """Revocations still in force, as (hash, token-exp epoch seconds).
 
-        Rows without expires_at are in force for the default TTL after
-        revoked_at, matching the Redis TTL they were written with; this keeps
-        the resync from re-seeding them forever.
+        A row with expires_at is in force until expires_at + grace (clock-skew
+        margin; the caller adds the grace when computing the TTL). A row
+        without expires_at is in force for the default TTL after revoked_at;
+        it is reported with exp = revoked_at + ttl - grace so that the
+        caller's uniform "+ grace" lands exactly on revoked_at + ttl, and it
+        stops being re-seeded after that.
+
+        The predicate has no COALESCE, so each branch is sargable. Today the
+        planner still seq-scans: the NULL/revoked_at branch has no matching
+        index. Adding one would need a migration.
         """
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT token_jti_hash, "
                     "       extract(epoch FROM COALESCE(expires_at, "
-                    "           revoked_at + make_interval(secs => %s)))::bigint "
+                    "           revoked_at + make_interval(secs => %(ttl)s - %(grace)s)))::bigint "
                     "FROM token_revocations "
-                    "WHERE COALESCE(expires_at, revoked_at + make_interval(secs => %s)) > now()",
-                    (self._default_ttl, self._default_ttl),
+                    "WHERE expires_at > now() - make_interval(secs => %(grace)s) "
+                    "   OR (expires_at IS NULL AND revoked_at > now() - make_interval(secs => %(ttl)s))",
+                    {"grace": self._grace, "ttl": self._default_ttl},
                 )
                 return [(row[0], row[1]) for row in cur.fetchall()]
 
@@ -129,6 +144,7 @@ class RevocationStore:
                 config.DB_URL,
                 connect_timeout=config.DB_CONNECT_TIMEOUT,
                 default_ttl_seconds=config.REVOCATION_TTL_SECONDS,
+                exp_grace_seconds=config.REVOCATION_EXP_GRACE_SECONDS,
             )
         else:
             self._db = None
@@ -197,11 +213,13 @@ class RevocationStore:
             logger.warning("revocation resync failed (non-fatal): %s", exc)
             return 0
         now = time.time()
+        grace = config.REVOCATION_EXP_GRACE_SECONDS
         loaded = 0
         try:
             for token_hash, expires_at in rows:
                 if expires_at is not None:
-                    remaining = int(expires_at - now)
+                    # Same rule as revoke(): in force until exp + grace.
+                    remaining = int(expires_at + grace - now)
                     if remaining <= 0:
                         continue
                 else:
@@ -253,9 +271,15 @@ class RevocationStore:
 
     @staticmethod
     def _ttl_for(expires_at: Optional[int]) -> int:
+        """TTL that keeps a revocation alive until exp + grace.
+
+        The grace covers relying parties that still accept a token shortly
+        after `exp` (JWT clock-skew leeway, host clock drift); without it the
+        key could vanish while the token is still being honoured.
+        """
         if expires_at is None:
             return config.REVOCATION_TTL_SECONDS
-        return max(1, int(expires_at - time.time()))
+        return max(1, int(expires_at + config.REVOCATION_EXP_GRACE_SECONDS - time.time()))
 
     def _cache_set(self, token_hash: str, ttl_seconds: int) -> None:
         if self._redis is not None:
