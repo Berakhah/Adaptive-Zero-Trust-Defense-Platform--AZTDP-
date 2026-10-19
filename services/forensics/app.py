@@ -2,17 +2,20 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from . import config, metrics
 from .db import close_pool, get_pool
+from .internal_auth import require_internal_token
 
 from .json_logging import configure as _configure_logging
 _configure_logging("forensics")
 logger = logging.getLogger("aztdp.forensics")
 
 app = FastAPI(title="aztdp-forensics")
+
+_auth = [Depends(require_internal_token)]
 
 
 @app.on_event("startup")
@@ -43,7 +46,7 @@ def prom_metrics() -> Response:
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
-@app.get("/v1/forensics/events")
+@app.get("/v1/forensics/events", dependencies=_auth)
 def list_events(
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
@@ -98,7 +101,7 @@ def list_events(
         metrics.QUERY_LATENCY.labels(endpoint="events").observe(time.perf_counter() - start)
 
 
-@app.get("/v1/forensics/replay/{session_id}")
+@app.get("/v1/forensics/replay/{session_id}", dependencies=_auth)
 def replay_session(session_id: str) -> Dict[str, Any]:
     metrics.QUERY_COUNT.labels(endpoint="replay").inc()
     start = time.perf_counter()
@@ -124,7 +127,7 @@ def replay_session(session_id: str) -> Dict[str, Any]:
         metrics.QUERY_LATENCY.labels(endpoint="replay").observe(time.perf_counter() - start)
 
 
-@app.get("/v1/forensics/incidents/{request_id}")
+@app.get("/v1/forensics/incidents/{request_id}", dependencies=_auth)
 def incident_detail(request_id: str) -> Dict[str, Any]:
     metrics.QUERY_COUNT.labels(endpoint="incidents").inc()
     start = time.perf_counter()

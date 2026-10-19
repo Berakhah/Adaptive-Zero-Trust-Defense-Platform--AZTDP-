@@ -192,6 +192,7 @@ services:
     build: ./services/forensics
     environment:
       AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
     ports:
       - "8004:8080"
     networks:
@@ -363,6 +364,9 @@ services:
     build: ./services/dashboard
     environment:
       AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+      # Full htpasswd line (user:hash), e.g. `echo "soc:$(openssl passwd -apr1)"`.
+      # Single-quote it in .env so the $ characters are not interpolated.
+      DASHBOARD_HTPASSWD: ${DASHBOARD_HTPASSWD}
     ports:
       - "8099:8099"
     networks:
@@ -376,7 +380,7 @@ services:
       - prometheus
       - attack-sim
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8099/"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8099/healthz"]
       interval: 10s
       timeout: 5s
       retries: 5
