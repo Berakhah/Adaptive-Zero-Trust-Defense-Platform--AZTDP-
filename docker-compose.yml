@@ -193,6 +193,7 @@ services:
       AZTDP_DB_URL: postgresql://aztdp_anomaly@postgres:5432/aztdp
       PGPASSWORD: ${PG_ANOMALY_PASSWORD:?PG_ANOMALY_PASSWORD is required (see .env.example)}
       AZTDP_MODEL_DIR: /app/models
+      AZTDP_MODEL_HMAC_KEY: ${AZTDP_MODEL_HMAC_KEY:?AZTDP_MODEL_HMAC_KEY is required (see .env.example)}
       AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
     volumes:
       - anomaly_models:/app/models

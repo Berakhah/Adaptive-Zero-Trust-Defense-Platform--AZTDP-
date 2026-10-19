@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from . import config, metrics
 from .feature_engineering import build_feature_vector, record_request
 from .internal_auth import require_internal_token
-from .model import AnomalyModel, start_hot_reload
+from .model import AnomalyModel, is_valid_version, start_hot_reload
 from .training import cold_start_train, persist_baseline, retrain_from_baselines, start_retrain_scheduler
 
 from .json_logging import configure as _configure_logging
@@ -43,6 +43,7 @@ class AnomalyRequest(BaseModel):
 @app.on_event("startup")
 def _on_startup() -> None:
     global redis_client
+    config.require_hmac_key()  # fail closed: never run without a model-signing key
     if config.REDIS_URL:
         try:
             redis_client = redis.Redis.from_url(config.REDIS_URL, decode_responses=True)
@@ -55,8 +56,10 @@ def _on_startup() -> None:
     if redis_client is not None:
         try:
             stored = redis_client.get(config.MODEL_VERSION_KEY)
-            if stored:
+            if stored and is_valid_version(stored):
                 target_version = stored
+            elif stored:
+                logger.error("invalid model version in redis ignored: %r", stored)
         except Exception:
             pass
 
