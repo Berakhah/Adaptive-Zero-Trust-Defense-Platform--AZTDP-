@@ -18,7 +18,7 @@ from . import config
 
 logger = logging.getLogger("aztdp.anomaly.model")
 
-_VERSION_RE = re.compile(r"v[0-9A-Za-z._-]+")  # used with fullmatch
+_VERSION_RE = re.compile(r"v[0-9A-Za-z._-]{1,64}")  # used with fullmatch
 
 
 def is_valid_version(version) -> bool:
@@ -28,6 +28,18 @@ def is_valid_version(version) -> bool:
 
 def _sign(data: bytes) -> str:
     return hmac.new(config.MODEL_HMAC_KEY.encode(), data, hashlib.sha256).hexdigest()
+
+
+_SIG_RE = re.compile(rb"[0-9A-Fa-f]{64}")
+
+
+def _signature_matches(data: bytes, sig_bytes: bytes) -> bool:
+    """Constant-time check of a raw .sig file against the HMAC of data."""
+    sig_bytes = sig_bytes.strip()
+    if _SIG_RE.fullmatch(sig_bytes) is None:
+        return False
+    expected = hmac.new(config.MODEL_HMAC_KEY.encode(), data, hashlib.sha256).digest()
+    return hmac.compare_digest(bytes.fromhex(sig_bytes.decode("ascii")), expected)
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -121,12 +133,26 @@ class AnomalyModel:
             data = path.read_bytes()
         except FileNotFoundError:
             return False
+        except (OSError, ValueError) as exc:
+            logger.error("model_signature_invalid version=%s reason=model_unreadable err=%s",
+                         version, type(exc).__name__)
+            return False
         try:
-            signature = sig_path.read_text().strip()
+            sig_bytes = sig_path.read_bytes()
         except FileNotFoundError:
             logger.error("model_signature_invalid version=%s reason=missing_signature", version)
             return False
-        if not hmac.compare_digest(_sign(data), signature):
+        except (OSError, ValueError) as exc:
+            logger.error("model_signature_invalid version=%s reason=signature_unreadable err=%s",
+                         version, type(exc).__name__)
+            return False
+        try:
+            verified = _signature_matches(data, sig_bytes)
+        except (OSError, ValueError, TypeError) as exc:
+            logger.error("model_signature_invalid version=%s reason=verify_error err=%s",
+                         version, type(exc).__name__)
+            return False
+        if not verified:
             logger.error("model_signature_invalid version=%s reason=mismatch", version)
             return False
         try:
