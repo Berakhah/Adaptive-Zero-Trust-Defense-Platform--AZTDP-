@@ -106,6 +106,10 @@ AZTDP_TRUSTED_PROXIES = os.getenv("AZTDP_TRUSTED_PROXIES", "")
 # These are no-ops when DEBUG=True so local dev is unaffected.
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = not DEBUG
+# In-cluster probes (Prometheus scrape, container healthcheck) speak plain HTTP and
+# do not follow a redirect to https; exempt just these two read-only endpoints.
+# Host validation (ALLOWED_HOSTS) still applies, so "django-app" must be listed.
+SECURE_REDIRECT_EXEMPT = [r"^health$", r"^metrics$"]
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0

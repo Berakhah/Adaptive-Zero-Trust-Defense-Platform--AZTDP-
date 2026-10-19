@@ -28,7 +28,7 @@ scrape_configs:
 
   - job_name: django-app
     static_configs:
-      - targets: ["django-app:8080"]
+      - targets: ["django-app:8000"]
 
   - job_name: spring-app
     metrics_path: /actuator/prometheus

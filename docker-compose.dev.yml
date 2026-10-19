@@ -53,6 +53,9 @@ services:
       AZTDP_DEBUG: "true"
     ports:
       - "127.0.0.1:8010:8000"
+  django-migrate:
+    environment:
+      AZTDP_DEBUG: "true"
   spring-app:
     ports:
       - "127.0.0.1:8011:8082"
