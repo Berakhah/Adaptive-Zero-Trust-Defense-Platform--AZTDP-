@@ -13,6 +13,17 @@ volumes:
   grafana_data:
   anomaly_models:
   prometheus_data:
+  alertmanager_data:
+
+secrets:
+  # Webhook URL delivered as a file (/run/secrets/alert_webhook_url): kept out of
+  # the committed config and out of container env/args (so not in `docker inspect`).
+  alert_webhook_url:
+    environment: ALERT_WEBHOOK_URL
+
+# Fail closed: refuse to start without a webhook URL (the secret above is only a
+# pass-through of the variable, so it cannot carry a :? guard itself).
+x-require-alert-webhook: ${ALERT_WEBHOOK_URL:?ALERT_WEBHOOK_URL is required (see .env.example)}
 
 services:
 
@@ -379,6 +390,37 @@ services:
       - prometheus_data:/prometheus
     networks:
       - aztdp
+
+  alertmanager:
+    # Pinned by index digest (tag v0.28.1; v0.27.0 panics on non-2xx webhook responses when url_file is used).
+    image: prom/alertmanager:v0.28.1@sha256:27c475db5fb156cab31d5c18a4251ac7ed567746a2483ff264516437a39b15ba
+    user: "65534:65534"
+    # Not read_only: Compose refuses to materialise an env-sourced secret into a
+    # read-only service (only `file:` secrets are allowed there). Mitigated by
+    # non-root, cap_drop ALL and no-new-privileges.
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    volumes:
+      - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    secrets:
+      - source: alert_webhook_url
+        target: alert_webhook_url
+        mode: 0444
+    networks:
+      - aztdp
+    mem_limit: 256m
+    pids_limit: 100
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   grafana:
     image: grafana/grafana:11.1.0

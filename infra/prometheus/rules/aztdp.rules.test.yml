@@ -1,0 +1,52 @@
+# promtool unit tests for aztdp.rules.yml. Run via scripts/check_prometheus.sh.
+rule_files: [aztdp.rules.yml]
+evaluation_interval: 30s
+tests:
+  - name: ServiceDown fires after up==0 for longer than 2m
+    interval: 30s
+    input_series:
+      - series: 'up{job="gateway"}'
+        values: '0x8'
+    alert_rule_test:
+      - eval_time: 1m          # still pending (for: 2m)
+        alertname: ServiceDown
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ServiceDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: gateway}
+            exp_annotations: {summary: "gateway is down"}
+
+  - name: ServiceDown does not fire for a healthy target
+    interval: 30s
+    input_series:
+      - series: 'up{job="gateway"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ServiceDown
+        exp_alerts: []
+
+  - name: FailClosedDenialSpike fires on a sustained deny surge
+    interval: 30s
+    input_series:
+      # +1500 denials per 30s step = 50/s, above the rule's 20/s threshold
+      - series: 'aztdp_policy_decisions_total{decision="deny",job="gateway"}'
+        values: '0+1500x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: FailClosedDenialSpike
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Sustained denial spike - check dependencies"
+
+  - name: FailClosedDenialSpike stays quiet at a low deny rate
+    interval: 30s
+    input_series:
+      - series: 'aztdp_policy_decisions_total{decision="deny",job="gateway"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: FailClosedDenialSpike
+        exp_alerts: []

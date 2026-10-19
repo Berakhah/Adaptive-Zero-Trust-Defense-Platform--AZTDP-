@@ -85,6 +85,24 @@ groups:
     interval: 30s
     rules:
 
+      # A scrape target is unreachable (covers every job incl. alertmanager)
+      - alert: ServiceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} is down"
+
+      # A dependency outage surfaces as risk_unavailable / policy_unavailable denials
+      - alert: FailClosedDenialSpike
+        expr: sum(rate(aztdp_policy_decisions_total{decision="deny"}[5m])) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sustained denial spike - check dependencies"
+
       # Any service returning 5xx
       - alert: ServiceErrorRateHigh
         expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.05
