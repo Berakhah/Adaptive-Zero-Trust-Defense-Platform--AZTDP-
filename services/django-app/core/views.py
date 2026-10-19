@@ -60,7 +60,7 @@ def step_up_verify(request):
     from django.conf import settings
 
     from .client_ip import parse_cidrs, resolve_client_ip
-    from .stepup import get_challenge_user, get_store, verify_challenge
+    from .stepup import bump_counter, get_challenge_user, get_store, verify_challenge
 
     try:
         body = json.loads(request.body)
@@ -89,9 +89,7 @@ def step_up_verify(request):
     try:
         store = get_store()
         ip_key = f"stepup:ip:{client_ip}"
-        hits = store.incr(ip_key)
-        if hits == 1:
-            store.expire(ip_key, _IP_WINDOW_SECONDS)
+        hits = bump_counter(store, ip_key, _IP_WINDOW_SECONDS)
         if hits > _IP_MAX_ATTEMPTS:
             return JsonResponse({"error": {"code": "rate_limited"}}, status=429)
 

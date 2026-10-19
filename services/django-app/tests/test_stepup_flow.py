@@ -86,7 +86,9 @@ class TestStepUpToken:
         code = _current_totp("user-z")
         token = verify_challenge("chal-tok3", code, "user-z")
         # Flip last char of signature
-        tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+        sig_start = token.rindex(".") + 1
+        mid = sig_start + 5  # last b64 char carries padding bits; flip a full one
+        tampered = token[:mid] + ("A" if token[mid] != "A" else "B") + token[mid + 1:]
         assert verify_step_up_token(tampered, "user-z", JTI) is False
 
     def test_expired_token_rejected(self, monkeypatch):

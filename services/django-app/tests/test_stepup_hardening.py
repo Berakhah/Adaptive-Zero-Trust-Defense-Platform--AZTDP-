@@ -94,3 +94,54 @@ def test_view_per_ip_throttle(rf):
         assert _post(rf, {"challenge_id": "nope", "code": "000000"}).status_code == 401
     assert _post(rf, {"challenge_id": "nope", "code": "000000"}).status_code == 429
     assert _post(rf, {"challenge_id": "nope", "code": "000000"}, ip="198.51.100.1").status_code == 401
+
+
+# ── fix round 1: per-user lockout, atomic counters, spoof-proof IP key ───────
+
+def test_per_user_lockout_across_challenges():
+    for i in range(stepup.MAX_USER_FAILURES):
+        cid = f"lk{i}"
+        stepup.create_challenge(cid, "victim")
+        assert stepup.verify_challenge(cid, "000000", "victim") is None
+    stepup.create_challenge("lk-final", "victim")
+    good = stepup.current_totp_for_tests("victim")
+    assert stepup.verify_challenge("lk-final", good, "victim") is None  # locked out
+
+
+def test_lockout_does_not_affect_other_user():
+    for i in range(stepup.MAX_USER_FAILURES):
+        stepup.create_challenge(f"o{i}", "victim")
+        stepup.verify_challenge(f"o{i}", "000000", "victim")
+    stepup.create_challenge("other-c", "bystander")
+    assert stepup.verify_challenge("other-c", stepup.current_totp_for_tests("bystander"), "bystander")
+
+
+def test_unknown_challenge_does_not_count_against_user():
+    stepup.verify_challenge("missing", "000000", "victim")
+    assert stepup.get_store().get("stepup:user:victim") is None
+
+
+def test_counter_without_ttl_gets_ttl():
+    stepup.get_store().set("stepup:user:u9", 3)  # orphan key, no TTL
+    assert stepup.get_store().ttl("stepup:user:u9") == -1
+    stepup.bump_counter(stepup.get_store(), "stepup:user:u9", 900)
+    assert 0 < stepup.get_store().ttl("stepup:user:u9") <= 900
+
+
+def test_ip_key_without_ttl_does_not_lock_forever(rf):
+    stepup.get_store().set("stepup:ip:203.0.113.9", 500)  # stale, no TTL
+    _post(rf, {"challenge_id": "nope", "code": "000000"})
+    assert 0 < stepup.get_store().ttl("stepup:ip:203.0.113.9") <= 60
+
+
+def test_spoofed_headers_ignored_when_not_from_trusted_proxy(rf):
+    import json
+    from core.views import step_up_verify
+    for i in range(3):
+        req = rf.post("/v1/auth/step-up/verify",
+                      data=json.dumps({"challenge_id": "nope", "code": "000000"}),
+                      content_type="application/json", REMOTE_ADDR="203.0.113.50",
+                      HTTP_X_CLIENT_IP=f"10.9.9.{i}", HTTP_X_FORWARDED_FOR=f"10.8.8.{i}")
+        step_up_verify(req)
+    assert stepup.get_store().get("stepup:ip:203.0.113.50") == "3"
+    assert not list(stepup.get_store().scan_iter("stepup:ip:10.*"))

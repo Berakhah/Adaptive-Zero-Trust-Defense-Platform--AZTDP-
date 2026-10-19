@@ -25,6 +25,9 @@ _STEP_UP_TOKEN_TTL = 300
 _TOTP_STEP = 30
 _TOTP_DIGITS = 6
 _KEY_PREFIX = "stepup:chal:"
+_USER_KEY_PREFIX = "stepup:user:"
+MAX_USER_FAILURES = 15      # wrong codes per user across all challenges
+_USER_WINDOW = 900          # seconds
 
 
 class StepUpConfigError(RuntimeError):
@@ -66,6 +69,26 @@ def get_store():
     return _store
 
 
+def bump_counter(r, key: str, window: int) -> int:
+    """INCR a counter and guarantee it carries a TTL.
+
+    INCR and TTL run in one MULTI; if the key has no expiry (first hit, or a
+    previous worker died between INCR and EXPIRE) the expiry is (re)applied, so
+    an orphaned counter can never lock a subject out permanently.
+    """
+    pipe = r.pipeline(transaction=True)
+    pipe.incr(key)
+    pipe.ttl(key)
+    count, ttl = pipe.execute()
+    if ttl < 0:
+        r.expire(key, window)
+    return int(count)
+
+
+def _user_locked(r, user_id: str) -> bool:
+    return int(r.get(_USER_KEY_PREFIX + user_id) or 0) >= MAX_USER_FAILURES
+
+
 def _user_secret(user_id: str) -> bytes:
     # Per-user secret derived from the master secret; enrollment is Open Question Q1.
     return hmac.new(_MASTER.encode(), user_id.encode(), hashlib.sha256).digest()
@@ -100,10 +123,13 @@ def verify_challenge(challenge_id: str, totp_code: str, user_id: str) -> Optiona
     entry = r.hgetall(key)
     if not entry or entry.get("user_id") != user_id:
         return None
+    if _user_locked(r, user_id):  # fail closed across all of the user's challenges
+        return None
     if r.hincrby(key, "attempts", 1) > MAX_ATTEMPTS:
         r.delete(key)
         return None
     if not _verify_totp(totp_code, _user_secret(user_id)):
+        bump_counter(r, _USER_KEY_PREFIX + user_id, _USER_WINDOW)
         return None
     if r.delete(key) != 1:  # one-shot, even under concurrent correct submissions
         return None
