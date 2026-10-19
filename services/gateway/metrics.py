@@ -16,3 +16,15 @@ REVOCATIONS = Counter(
     "aztdp_token_revocations_total",
     "Tokens revoked through the gateway",
 )
+
+TELEMETRY_DROPPED = Counter(
+    "aztdp_telemetry_dropped_total",
+    "Audit telemetry events dropped after retries were exhausted",
+    labelnames=("service", "reason"),
+)
+
+TELEMETRY_RETRIES = Counter(
+    "aztdp_telemetry_retry_total",
+    "Audit telemetry delivery retries",
+    labelnames=("service",),
+)

@@ -1,5 +1,6 @@
 import logging
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
@@ -53,8 +54,8 @@ def list_events(
     request_id: Optional[str] = None,
     event_type: Optional[str] = None,
     ip: Optional[str] = None,
-    since: Optional[str] = Query(None, description="ISO8601"),
-    until: Optional[str] = Query(None, description="ISO8601"),
+    since: Optional[datetime] = Query(None, description="ISO8601"),
+    until: Optional[datetime] = Query(None, description="ISO8601"),
     limit: int = Query(config.DEFAULT_PAGE_SIZE, ge=1, le=config.MAX_PAGE_SIZE),
     offset: int = Query(0, ge=0),
 ) -> Dict[str, Any]:
@@ -78,10 +79,10 @@ def list_events(
         if ip:
             clauses.append("ip = %s")
             params.append(ip)
-        if since:
+        if since is not None:
             clauses.append("occurred_at >= %s::timestamptz")
             params.append(since)
-        if until:
+        if until is not None:
             clauses.append("occurred_at <= %s::timestamptz")
             params.append(until)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""

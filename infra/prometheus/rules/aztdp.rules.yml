@@ -94,3 +94,17 @@ groups:
         annotations:
           summary: "Service {{ $labels.job }} error rate > 5%"
           description: "Service {{ $labels.job }} is returning 5xx errors at {{ $value | humanizePercentage }} of requests."
+
+  - name: aztdp.audit
+    interval: 30s
+    rules:
+
+      # Audit events lost after delivery retries were exhausted
+      - alert: AuditTelemetryDropping
+        expr: increase(aztdp_telemetry_dropped_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Audit events are being dropped ({{ $labels.service }})"
+          description: "Service {{ $labels.service }} dropped audit telemetry (reason {{ $labels.reason }}) after exhausting retries; the audit trail has gaps."

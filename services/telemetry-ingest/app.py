@@ -209,11 +209,11 @@ def _update_session(cur, event: TelemetryEvent) -> None:
             risk_avg      = (sessions.risk_avg * sessions.request_count + EXCLUDED.risk_max)
                               / (sessions.request_count + 1),
             decision_counts = CASE
-                WHEN %s IS NULL THEN sessions.decision_counts
+                WHEN %s::text IS NULL THEN sessions.decision_counts
                 ELSE jsonb_set(
                     sessions.decision_counts,
                     ARRAY[%s::text],
-                    to_jsonb(COALESCE((sessions.decision_counts->>%s)::int, 0) + 1)
+                    to_jsonb(COALESCE((sessions.decision_counts->>%s::text)::int, 0) + 1)
                 )
             END,
             is_suspicious = sessions.is_suspicious OR EXCLUDED.is_suspicious,
