@@ -1,90 +1,118 @@
 """Step-up challenge issuance and TOTP verification.
 
-When the OPA policy returns a *stepup* decision the middleware issues a
-challenge (challenge_id + allowed methods + TTL). This module:
+Challenges live in Redis (shared across gunicorn workers, TTL-expiring), are
+limited to MAX_ATTEMPTS wrong codes, and are one-shot. TOTP secrets are derived
+per user from AZTDP_TOTP_MASTER_SECRET. The resulting step-up token is an HS256
+JWT bound to the user *and* the access token (jti hash) it was issued for.
 
-1.  Stores pending challenges in a TTL-expiring in-memory dict (per-worker).
-2.  Provides a verification endpoint that validates a TOTP code and returns a
-    short-lived ``step_up_token`` JWT.
-3.  The token is a self-contained HS256 JWT containing the original challenge_id,
-    the user sub, and an expiry. Downstream middleware or OPA can check for it
-    to bypass the step-up gate on subsequent requests.
-
-Production considerations
-~~~~~~~~~~~~~~~~~~~~~~~~~
-*  Replace the in-memory store with Redis (same Redis instance as revocations)
-   to share challenge state across gunicorn workers.
-*  Pull the TOTP secret from Keycloak's credential store per-user instead of
-   a single shared secret.
-*  WebAuthn verification requires a server-side library (e.g. py_webauthn);
-   this module covers TOTP only as the first practical implementation.
+Open question Q1: enrollment (showing the derived secret to the user's
+authenticator) is not implemented; WebAuthn is not covered.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
-import math
+import json as _json
 import os
 import struct
 import time
-from typing import Any, Dict, Optional
+from typing import Optional, Tuple
 
+MAX_ATTEMPTS = 5
 _CHALLENGE_TTL = 300  # seconds
-_STEP_UP_TOKEN_TTL = 600  # 10 minutes
+_STEP_UP_TOKEN_TTL = 300
 _TOTP_STEP = 30
 _TOTP_DIGITS = 6
-
-# In production: pull from Keycloak user credential or Vault.
-_TOTP_SECRET = os.getenv("AZTDP_TOTP_SECRET", "AZTDP_DEV_TOTP_SECRET_BASE32")
-_SIGNING_KEY = os.getenv("AZTDP_STEPUP_SIGNING_KEY", "aztdp-stepup-signing-key-change-me")
+_KEY_PREFIX = "stepup:chal:"
 
 
-# ── In-memory challenge store (single-worker; replace with Redis for multi) ──
+class StepUpConfigError(RuntimeError):
+    pass
 
-_challenges: Dict[str, Dict[str, Any]] = {}
+
+def load_config(debug: bool) -> Tuple[str, str]:
+    signing = os.getenv("AZTDP_STEPUP_SIGNING_KEY", "")
+    master = os.getenv("AZTDP_TOTP_MASTER_SECRET", "")
+    if not debug and (not signing or not master):
+        raise StepUpConfigError(
+            "AZTDP_STEPUP_SIGNING_KEY and AZTDP_TOTP_MASTER_SECRET are required"
+        )
+    return signing or "dev-only-signing-key", master or "dev-only-master-secret"
 
 
-def create_challenge(challenge_id: str, user_id: str) -> Dict[str, Any]:
-    """Store a pending step-up challenge keyed by challenge_id."""
-    entry = {
-        "challenge_id": challenge_id,
-        "user_id": user_id,
-        "created_at": time.time(),
-        "verified": False,
-    }
-    _challenges[challenge_id] = entry
-    _gc()
-    return entry
+def _debug() -> bool:
+    from django.conf import settings
+
+    return bool(getattr(settings, "DEBUG", False))
+
+
+_SIGNING_KEY, _MASTER = load_config(_debug())
+
+_store = None
+
+
+def get_store():
+    """Return the shared Redis client (tests monkeypatch this)."""
+    global _store
+    if _store is None:
+        import redis
+        from django.conf import settings
+
+        url = settings.AZTDP.get("REDIS_URL", "")
+        if not url:
+            raise StepUpConfigError("AZTDP_REDIS_URL is required for step-up")
+        _store = redis.Redis.from_url(url, decode_responses=True, socket_timeout=1.0)
+    return _store
+
+
+def _user_secret(user_id: str) -> bytes:
+    # Per-user secret derived from the master secret; enrollment is Open Question Q1.
+    return hmac.new(_MASTER.encode(), user_id.encode(), hashlib.sha256).digest()
+
+
+def create_challenge(challenge_id: str, user_id: str, jti_hash: str = "") -> None:
+    r = get_store()
+    key = _KEY_PREFIX + challenge_id
+    pipe = r.pipeline()
+    pipe.hset(key, mapping={"user_id": user_id, "attempts": 0, "jti_hash": jti_hash})
+    pipe.expire(key, _CHALLENGE_TTL)
+    pipe.execute()
+
+
+def get_challenge_user(challenge_id: str) -> str:
+    """Return the user_id the challenge was issued to ('' if none)."""
+    return get_store().hget(_KEY_PREFIX + challenge_id, "user_id") or ""
+
+
+def challenge_exists(challenge_id: str, user_id: str) -> bool:
+    return bool(user_id) and get_challenge_user(challenge_id) == user_id
 
 
 def verify_challenge(challenge_id: str, totp_code: str, user_id: str) -> Optional[str]:
-    """Validate a TOTP code against the stored challenge.
+    """Validate a TOTP code; returns a step-up token or None.
 
-    Returns a signed step_up_token JWT string on success, or None on failure.
+    Every call against an existing challenge counts as an attempt; the challenge
+    is destroyed after MAX_ATTEMPTS.
     """
-    entry = _challenges.get(challenge_id)
-    if not entry:
+    r = get_store()
+    key = _KEY_PREFIX + challenge_id
+    entry = r.hgetall(key)
+    if not entry or entry.get("user_id") != user_id:
         return None
-    if entry["user_id"] != user_id:
+    if r.hincrby(key, "attempts", 1) > MAX_ATTEMPTS:
+        r.delete(key)
         return None
-    if time.time() - entry["created_at"] > _CHALLENGE_TTL:
-        _challenges.pop(challenge_id, None)
+    if not _verify_totp(totp_code, _user_secret(user_id)):
         return None
-    if entry["verified"]:
-        return None  # one-shot
-
-    if not _verify_totp(totp_code, _TOTP_SECRET):
+    if r.delete(key) != 1:  # one-shot, even under concurrent correct submissions
         return None
-
-    entry["verified"] = True
-    _challenges.pop(challenge_id, None)
-
-    return _mint_step_up_token(user_id, challenge_id)
+    return _mint_step_up_token(user_id, challenge_id, entry.get("jti_hash", ""))
 
 
 # ── TOTP implementation (RFC 6238 / RFC 4226) ────────────────────────────────
 
-def _verify_totp(code: str, secret: str, window: int = 1) -> bool:
+def _verify_totp(code: str, secret: bytes, window: int = 1) -> bool:
     """Verify a TOTP code within ±window time steps."""
     if not code or not code.isdigit() or len(code) != _TOTP_DIGITS:
         return False
@@ -97,13 +125,9 @@ def _verify_totp(code: str, secret: str, window: int = 1) -> bool:
     return False
 
 
-def _hotp(secret: str, counter: int) -> str:
+def _hotp(secret: bytes, counter: int) -> str:
     """Compute an HOTP code per RFC 4226."""
-    import base64
-    try:
-        key = base64.b32decode(secret.upper() + "=" * (-len(secret) % 8))
-    except Exception:
-        key = secret.encode("utf-8")
+    key = secret
     msg = struct.pack(">Q", counter)
     digest = hmac.new(key, msg, hashlib.sha1).digest()
     offset = digest[-1] & 0x0F
@@ -113,19 +137,17 @@ def _hotp(secret: str, counter: int) -> str:
 
 # ── Step-up token (compact HS256 JWT) ────────────────────────────────────────
 
-def _mint_step_up_token(user_id: str, challenge_id: str) -> str:
+def _mint_step_up_token(user_id: str, challenge_id: str, jti_hash: str = "") -> str:
     """Issue a minimal HS256 JWT for step-up proof.
 
     We avoid a full PyJWT dependency by constructing the token manually.
     This is a self-contained claim that the enforcement middleware can verify.
     """
-    import base64
-    import json as _json
-
     header = {"alg": "HS256", "typ": "JWT"}
     payload = {
         "sub": user_id,
         "challenge_id": challenge_id,
+        "jti_hash": jti_hash,
         "purpose": "step_up",
         "iat": int(time.time()),
         "exp": int(time.time()) + _STEP_UP_TOKEN_TTL,
@@ -139,11 +161,8 @@ def _mint_step_up_token(user_id: str, challenge_id: str) -> str:
     return segments + "." + _b64(sig)
 
 
-def verify_step_up_token(token: str, user_id: str) -> bool:
+def verify_step_up_token(token: str, user_id: str, access_jti_hash: str) -> bool:
     """Verify a previously issued step-up token."""
-    import base64
-    import json as _json
-
     try:
         parts = token.split(".")
         if len(parts) != 3:
@@ -166,6 +185,10 @@ def verify_step_up_token(token: str, user_id: str) -> bool:
             return False
         if payload.get("sub") != user_id:
             return False
+        if not access_jti_hash or not hmac.compare_digest(
+            str(payload.get("jti_hash", "")), access_jti_hash
+        ):
+            return False
         if payload.get("exp", 0) < time.time():
             return False
         return True
@@ -173,11 +196,11 @@ def verify_step_up_token(token: str, user_id: str) -> bool:
         return False
 
 
-# ── Housekeeping ─────────────────────────────────────────────────────────────
+# ── Test helpers ─────────────────────────────────────────────────────────────
 
-def _gc() -> None:
-    """Remove expired challenges to prevent unbounded growth."""
-    now = time.time()
-    expired = [k for k, v in _challenges.items() if now - v["created_at"] > _CHALLENGE_TTL]
-    for k in expired:
-        _challenges.pop(k, None)
+def current_totp_for_tests(user_id: str) -> str:
+    return _hotp(_user_secret(user_id), int(time.time()) // _TOTP_STEP)
+
+
+def mint_for_tests(user_id: str, challenge_id: str, jti_hash: str) -> str:
+    return _mint_step_up_token(user_id, challenge_id, jti_hash)

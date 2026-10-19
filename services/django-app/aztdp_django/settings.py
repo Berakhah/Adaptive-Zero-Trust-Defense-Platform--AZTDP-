@@ -70,6 +70,7 @@ AZTDP = {
     "TIMEOUT_CONNECT": float(os.getenv("AZTDP_TIMEOUT_CONNECT", "0.2")),
     "TIMEOUT_READ": float(os.getenv("AZTDP_TIMEOUT_READ", "0.8")),
     "INTERNAL_TOKEN": os.getenv("AZTDP_INTERNAL_TOKEN", ""),
+    "REDIS_URL": os.getenv("AZTDP_REDIS_URL", ""),
 }
 
 AZTDP_ENDPOINT_SENSITIVITY = [

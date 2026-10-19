@@ -13,5 +13,22 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "aztdp_django.settings")
 os.environ.setdefault("AZTDP_DB_ENGINE", "django.db.backends.sqlite3")
 os.environ.setdefault("AZTDP_DB_NAME", ":memory:")
 os.environ.setdefault("AZTDP_SECRET_KEY", "test-secret")
+# Step-up secrets are required (fail-closed) outside DEBUG; supply test values.
+os.environ.setdefault("AZTDP_STEPUP_SIGNING_KEY", "test-signing-key")
+os.environ.setdefault("AZTDP_TOTP_MASTER_SECRET", "test-master-secret")
 
 django.setup()
+
+
+import fakeredis  # noqa: E402
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fake_stepup_store(monkeypatch):
+    """Every test gets a fresh in-memory Redis for the step-up store."""
+    from core import stepup
+
+    shared = fakeredis.FakeRedis(decode_responses=True)
+    monkeypatch.setattr(stepup, "get_store", lambda: shared)
+    yield shared

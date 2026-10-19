@@ -213,6 +213,9 @@ services:
       AZTDP_TOKEN_REVOKE_URL: http://gateway:8080/v1/tokens/revoke
       AZTDP_FAIL_OPEN: "false"
       AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+      AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED}@redis:6379/0
+      AZTDP_STEPUP_SIGNING_KEY: ${AZTDP_STEPUP_SIGNING_KEY}
+      AZTDP_TOTP_MASTER_SECRET: ${AZTDP_TOTP_MASTER_SECRET}
     command: >
       sh -c "python manage.py migrate --noinput &&
              gunicorn aztdp_django.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 30"
@@ -220,6 +223,8 @@ services:
       - aztdp
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       keycloak:
         condition: service_healthy

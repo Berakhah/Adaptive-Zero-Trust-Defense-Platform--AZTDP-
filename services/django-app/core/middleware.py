@@ -157,9 +157,9 @@ class RiskAuthzMiddleware:
             step_up_header = request.META.get("HTTP_X_STEP_UP_TOKEN", "")
             if step_up_header:
                 from .stepup import verify_step_up_token
-                if verify_step_up_token(step_up_header, subject_id):
+                if verify_step_up_token(step_up_header, subject_id, token_jti_hash):
                     return self.get_response(request)
-            return self._stepup(reason, subject_id)
+            return self._stepup(reason, subject_id, token_jti_hash)
         if action == "revoke":
             self._revoke(token_jti_hash, "policy")
             return self._deny("token_revoked")
@@ -199,11 +199,11 @@ class RiskAuthzMiddleware:
     def _deny(self, code: str):
         return JsonResponse({"error": {"code": code}}, status=403)
 
-    def _stepup(self, reason: Dict[str, Any], subject_id: str):
-        from .stepup import create_challenge, verify_step_up_token
+    def _stepup(self, reason: Dict[str, Any], subject_id: str, token_jti_hash: str = ""):
+        from .stepup import create_challenge
 
         challenge_id = reason.get("challenge_id", str(uuid.uuid4()))
-        create_challenge(challenge_id, subject_id)
+        create_challenge(challenge_id, subject_id, token_jti_hash)
         return JsonResponse(
             {
                 "error": {
