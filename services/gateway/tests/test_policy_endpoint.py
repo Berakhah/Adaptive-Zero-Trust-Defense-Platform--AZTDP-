@@ -45,7 +45,7 @@ def test_decision_passes_through_opa_allow(auth_headers):
 def test_revoke_endpoint(auth_headers):
     r = client.post(
         "/v1/tokens/revoke",
-        json={"token_jti_hash": "xyz", "reason": "test", "source": "unit"},
+        json={"token_jti_hash": "xyz", "reason": "test", "source": "manual"},
         headers=auth_headers,
     )
     assert r.status_code == 200

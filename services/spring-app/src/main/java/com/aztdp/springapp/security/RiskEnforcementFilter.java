@@ -4,6 +4,7 @@ import com.aztdp.springapp.client.PolicyClient;
 import com.aztdp.springapp.client.RiskClient;
 import com.aztdp.springapp.client.RiskClientException;
 import com.aztdp.springapp.client.TokenRevocationClient;
+import com.aztdp.springapp.client.TokenRevocationException;
 import com.aztdp.springapp.config.AztdpProperties;
 import com.aztdp.springapp.model.PolicyDecision;
 import com.aztdp.springapp.model.PolicyInput;
@@ -21,6 +22,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -29,6 +32,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 @Component
 public class RiskEnforcementFilter extends OncePerRequestFilter {
+    private static final Logger log = LoggerFactory.getLogger(RiskEnforcementFilter.class);
+
     private final RiskClient riskClient;
     private final PolicyClient policyClient;
     private final TokenRevocationClient revocationClient;
@@ -142,7 +147,18 @@ public class RiskEnforcementFilter extends OncePerRequestFilter {
         }
         if ("revoke".equalsIgnoreCase(action)) {
             if (!tokenHash.isEmpty()) {
-                revocationClient.revoke(tokenHash, "policy");
+                try {
+                    revocationClient.revoke(tokenHash, "policy", jwtAuth.getToken().getExpiresAt());
+                } catch (RuntimeException exc) {
+                    // Fail closed: the current request is denied either way.
+                    String code = exc instanceof TokenRevocationException tre ? tre.getCode() : "revocation_unavailable";
+                    log.error(
+                        "revocation failed ({}) for token_jti_hash={}... — current request denied, "
+                            + "but the token is not durably revoked",
+                        code,
+                        tokenHash.substring(0, Math.min(12, tokenHash.length()))
+                    );
+                }
             }
             writeError(response, HttpStatus.FORBIDDEN, "token_revoked");
             return;

@@ -168,9 +168,15 @@ paths:
       tags: [revocation]
       summary: Revoke a token by its JTI hash
       description: |
-        Adds `token_jti_hash` to the revocation store (in-memory + Redis in
-        Phase 6B). Subsequent `POST /v1/policy/decision` calls for the same
-        hash return `decision=revoke` without calling OPA.
+        Persists `token_jti_hash` synchronously to Postgres (`token_revocations`),
+        then caches it in Redis with TTL bounded by `expires_at`. Subsequent
+        `POST /v1/policy/decision` calls for the same hash return
+        `decision=revoke` without calling OPA. A background resync re-seeds
+        Redis from Postgres every `AZTDP_REVOCATION_RESYNC_INTERVAL_SECONDS`.
+
+        If the Postgres write fails the endpoint answers
+        `503 revocation_not_persisted`; callers must treat that as a failed
+        revocation and still deny the current request (fail closed).
 
         Called by app service middlewares when OPA returns `decision=revoke`, or
         by an administrative action.
@@ -200,6 +206,14 @@ paths:
                     enum: ["revoked"]
               example:
                 status: "revoked"
+        "503":
+          description: Revocation could not be persisted (fail closed; caller denies)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+              example:
+                detail: "revocation_not_persisted"
 
   /v1/tokens/revoked/{token_jti_hash}:
     get:
@@ -417,6 +431,15 @@ components:
           enum: ["policy", "admin", "session_end", "manual"]
           description: Which system component triggered the revocation
           example: "policy"
+        expires_at:
+          type: integer
+          format: int64
+          nullable: true
+          description: |
+            The access token's `exp` claim (epoch seconds). Bounds the cache TTL
+            (`max(1, expires_at - now)`); when absent the default
+            `AZTDP_REVOCATION_TTL_SECONDS` applies.
+          example: 1760889600
 
     ErrorDetail:
       type: object

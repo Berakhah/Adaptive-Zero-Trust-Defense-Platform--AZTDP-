@@ -100,3 +100,74 @@ def test_stepup_returns_401_with_challenge(rf):
     assert response.status_code == 401
     body = response.content.decode()
     assert "STEP_UP_REQUIRED" in body
+
+
+# --- Task 9: durable revocation -------------------------------------------
+
+def _revoke_decision(mw, exp=1_760_000_000):
+    mw.verifier.verify = MagicMock(
+        return_value={
+            "sub": "user-1",
+            "jti": "jti-abc",
+            "session_state": "sess",
+            "roles": ["user"],
+            "exp": exp,
+        }
+    )
+    mw.risk_client.evaluate = MagicMock(
+        return_value={"risk_score": 0.99, "trust_score": 0.01, "anomaly_score": 0.0}
+    )
+    mw.policy_client.decide = MagicMock(
+        return_value={"decision": {"decision": "revoke", "reason": {"rule": "very_high_risk"}}}
+    )
+
+
+def test_revoke_sends_token_exp_as_expires_at(rf):
+    mw = _build_middleware()
+    _revoke_decision(mw, exp=1_760_000_123)
+    mw.revocation_client.revoke = MagicMock(return_value={"status": "revoked"})
+    response = mw(_request(rf))
+    assert response.status_code == 403
+    payload = mw.revocation_client.revoke.call_args.args[0]
+    assert payload["expires_at"] == 1_760_000_123
+    assert payload["source"] == "policy"
+
+
+def test_revoke_not_persisted_still_denies_and_logs_error(rf, caplog):
+    from core.revocation_client import RevocationClientError
+
+    mw = _build_middleware()
+    _revoke_decision(mw)
+    mw.revocation_client.revoke = MagicMock(
+        side_effect=RevocationClientError("revocation_not_persisted")
+    )
+    with caplog.at_level("ERROR", logger="aztdp.middleware"):
+        response = mw(_request(rf))
+    assert response.status_code == 403
+    assert b"token_revoked" in response.content
+    assert any(
+        r.levelname == "ERROR" and "revocation_not_persisted" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_revocation_client_maps_503_to_not_persisted():
+    from core.revocation_client import RevocationClientError, TokenRevocationClient
+
+    client = TokenRevocationClient("http://gw/v1/tokens/revoke", 0.1, 0.1, internal_token="t")
+    resp = MagicMock(status_code=503)
+    client.session.post = MagicMock(return_value=resp)
+    with pytest.raises(RevocationClientError) as excinfo:
+        client.revoke({"token_jti_hash": "h", "reason": "policy", "source": "policy"})
+    assert excinfo.value.code == "revocation_not_persisted"
+
+
+def test_revocation_client_maps_network_error_to_unavailable():
+    import requests
+    from core.revocation_client import RevocationClientError, TokenRevocationClient
+
+    client = TokenRevocationClient("http://gw/v1/tokens/revoke", 0.1, 0.1)
+    client.session.post = MagicMock(side_effect=requests.ConnectionError("down"))
+    with pytest.raises(RevocationClientError) as excinfo:
+        client.revoke({"token_jti_hash": "h", "reason": "policy", "source": "policy"})
+    assert excinfo.value.code == "revocation_unavailable"

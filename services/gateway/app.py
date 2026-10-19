@@ -1,4 +1,5 @@
-from typing import Any, Dict
+from datetime import datetime, timezone
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Response
 
@@ -10,7 +11,7 @@ from pydantic import BaseModel
 from . import config, metrics
 from .internal_auth import require_internal_token
 from .opa_client import OpaClientError, evaluate
-from .revocation_store import RevocationStore
+from .revocation_store import RevocationPersistError, RevocationStore
 from .telemetry import emit_async, shutdown_executor
 
 app = FastAPI(title="aztdp-policy-gateway")
@@ -20,10 +21,12 @@ revocations = RevocationStore()
 @app.on_event("startup")
 def _on_startup() -> None:
     revocations.cold_start_recovery()
+    revocations.start_periodic_resync(config.REVOCATION_RESYNC_INTERVAL_SECONDS)
 
 
 @app.on_event("shutdown")
-def _drain_telemetry() -> None:
+def _on_shutdown() -> None:
+    revocations.stop_periodic_resync()
     shutdown_executor()
 
 
@@ -34,7 +37,10 @@ class DecisionRequest(BaseModel):
 class RevokeRequest(BaseModel):
     token_jti_hash: str
     reason: str
-    source: str
+    # Mirrors the CHECK constraint on token_revocations.source.
+    source: Literal["policy", "admin", "session_end", "manual"]
+    # The access token's `exp` (epoch seconds); bounds the cache TTL.
+    expires_at: Optional[int] = None
 
 
 @app.get("/health")
@@ -85,14 +91,27 @@ def policy_version() -> Dict[str, str]:
 @app.post("/v1/tokens/revoke", dependencies=[Depends(require_internal_token)])
 def revoke_token(request: RevokeRequest) -> Dict[str, Any]:
     if request.token_jti_hash:
-        revocations.revoke(request.token_jti_hash)
+        try:
+            revocations.revoke(
+                request.token_jti_hash,
+                request.expires_at,
+                reason=request.reason,
+                source=request.source,
+            )
+        except RevocationPersistError:
+            # Fail closed: the caller must treat the revocation as failed and deny.
+            raise HTTPException(status_code=503, detail="revocation_not_persisted")
         metrics.REVOCATIONS.inc()
+        payload: Dict[str, Any] = {"reason": request.reason, "source": request.source}
+        if request.expires_at is not None:
+            # ISO-8601 so telemetry-ingest's ::timestamptz cast accepts it.
+            payload["expires_at"] = datetime.fromtimestamp(
+                request.expires_at, tz=timezone.utc
+            ).isoformat()
+        # Audit trail (who/why); persistence already happened synchronously above.
         emit_async(
             "token_revocation",
-            {
-                "token_jti_hash": request.token_jti_hash,
-                "payload": {"reason": request.reason, "source": request.source},
-            },
+            {"token_jti_hash": request.token_jti_hash, "payload": payload},
         )
     return {"status": "revoked"}
 

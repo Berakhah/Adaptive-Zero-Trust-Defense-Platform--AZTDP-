@@ -161,22 +161,29 @@ class RiskAuthzMiddleware:
                     return self.get_response(request)
             return self._stepup(reason, subject_id, token_jti_hash)
         if action == "revoke":
-            self._revoke(token_jti_hash, "policy")
+            # Deny regardless of whether the revocation could be recorded.
+            self._revoke(token_jti_hash, "policy", claims.get("exp"))
             return self._deny("token_revoked")
         return self._deny("policy_denied")
 
-    def _revoke(self, token_jti_hash: str, reason: str) -> None:
+    def _revoke(self, token_jti_hash: str, reason: str, expires_at: Any = None) -> None:
         if not token_jti_hash:
             return
+        payload: Dict[str, Any] = {
+            "token_jti_hash": token_jti_hash,
+            "reason": reason,
+            "source": "policy",
+        }
+        if isinstance(expires_at, (int, float)) and not isinstance(expires_at, bool):
+            payload["expires_at"] = int(expires_at)
         try:
-            self.revocation_client.revoke(
-                {"token_jti_hash": token_jti_hash, "reason": reason, "source": "policy"}
-            )
-        except RevocationClientError:
+            self.revocation_client.revoke(payload)
+        except RevocationClientError as exc:
             import logging
             logging.getLogger("aztdp.middleware").error(
-                "revocation failed for token_jti_hash=%s reason=%s — "
-                "token remains valid until expiry",
+                "revocation failed (%s) for token_jti_hash=%s reason=%s — current "
+                "request denied, but the token is not durably revoked",
+                exc.code,
                 token_jti_hash[:12] + "...",
                 reason,
             )

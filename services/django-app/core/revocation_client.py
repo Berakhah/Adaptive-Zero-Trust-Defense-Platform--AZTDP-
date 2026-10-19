@@ -3,7 +3,12 @@ import requests
 
 
 class RevocationClientError(Exception):
-    pass
+    """Revocation failed. `code` is revocation_not_persisted (gateway 503) or
+    revocation_unavailable (network/other HTTP error)."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
 
 
 class TokenRevocationClient:
@@ -23,7 +28,12 @@ class TokenRevocationClient:
     def revoke(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
             response = self.session.post(self.revoke_url, json=payload, timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise RevocationClientError("revocation_unavailable") from exc
+        if response.status_code == 503:
+            raise RevocationClientError("revocation_not_persisted")
+        try:
             response.raise_for_status()
             return response.json()
-        except requests.RequestException as exc:
+        except (requests.RequestException, ValueError) as exc:
             raise RevocationClientError("revocation_unavailable") from exc
