@@ -449,7 +449,7 @@ For detailed troubleshooting, see [docs/runbooks/QUICK_START_GUIDE.md § Trouble
 
 ### Data & Configuration
 - **[Redis Patterns](docs/data-model/REDIS_PATTERNS.md)** — 5 key patterns, TTLs, memory sizing
-- **[Database Schema](scripts/db/schema.sql)** — 6 tables, 22 indexes
+- **[Database Schema](scripts/db/migrations/)** — versioned migrations (V1 tables, V2 audit partitioning, V3 append-only audit), applied by `scripts/db/migrate.sh`
 - **[Component Ports](docs/architecture/component-ports.md)** — Port map, 30+ env vars
 
 ---

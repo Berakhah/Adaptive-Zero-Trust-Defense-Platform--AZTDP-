@@ -1,3 +1,6 @@
 *.sh text eol=lf
 .env.dev text eol=lf
 infra/keycloak/Dockerfile text eol=lf
+# SQL is bind-mounted into Linux postgres containers and run by psql.
+infra/postgres/*.sql text eol=lf
+scripts/db/**/*.sql text eol=lf

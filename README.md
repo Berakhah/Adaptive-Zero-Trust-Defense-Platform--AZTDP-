@@ -160,7 +160,7 @@ helm install aztdp infra/helm/ -n aztdp --create-namespace
 - [docs/runbooks/INCIDENT_RESPONSE.md](docs/runbooks/INCIDENT_RESPONSE.md) — Forensics queries by attack type
 - [docs/SECURITY.md](docs/SECURITY.md) — Vulnerability reporting, known gaps
 - [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — Dev setup, PR checklist
-- [scripts/db/schema.sql](scripts/db/schema.sql) — PostgreSQL schema (6 tables, 22 indexes)
+- [scripts/db/migrations/](scripts/db/migrations/) — PostgreSQL schema as versioned migrations, applied by [scripts/db/migrate.sh](scripts/db/migrate.sh) (compose service `db-migrate`) with per-service roles ([infra/postgres/04_roles.sql](infra/postgres/04_roles.sql), [05_grants.sql](infra/postgres/05_grants.sql))
 
 ---
 

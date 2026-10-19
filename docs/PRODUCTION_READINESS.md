@@ -3,7 +3,7 @@
 Each task references the workstream/ID from the principal-level audit (2026-05-03). Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` won't do
 
 ## P0 — Deployment Blockers
-- [x] P0.1 Mount schema.sql in docker-compose
+- [x] P0.1 Mount schema.sql in docker-compose (superseded: one-shot `db-migrate` service applies `scripts/db/migrations/`)
 - [x] P0.2 Anomaly model persistent volume
 - [x] P0.3 Verify Spring Boot 4.0.6 / Java 25 build (confirmed in Maven Central metadata 2026-05-03)
 

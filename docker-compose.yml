@@ -22,13 +22,14 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: aztdp
+      # Bootstrap superuser: used only by db-migrate and break-glass admin. No
+      # service connects as it; each has its own role (infra/postgres/04_roles.sql).
       POSTGRES_USER: aztdp
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (see .env.example)}
+    # No docker-entrypoint-initdb.d scripts: schema, roles and grants are applied
+    # by db-migrate on every deploy (initdb scripts would only ever run once).
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
-      - ./scripts/db/schema.sql:/docker-entrypoint-initdb.d/02_schema.sql:ro
-      - ./infra/postgres/03_grants.sql:/docker-entrypoint-initdb.d/03_grants.sql:ro
     networks:
       - aztdp
     healthcheck:
@@ -36,6 +37,36 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # One-shot: roles + versioned migrations + grants (scripts/db/migrate.sh).
+  # Every service that touches Postgres waits for it to exit 0.
+  db-migrate:
+    image: postgres:16-alpine
+    entrypoint: ["sh", "/aztdp/scripts/db/migrate.sh"]
+    user: postgres
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      PGHOST: postgres
+      PGUSER: aztdp
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (see .env.example)}
+      PG_OWNER_PASSWORD: ${PG_OWNER_PASSWORD:?PG_OWNER_PASSWORD is required (see .env.example)}
+      PG_INGEST_PASSWORD: ${PG_INGEST_PASSWORD:?PG_INGEST_PASSWORD is required (see .env.example)}
+      PG_FORENSICS_PASSWORD: ${PG_FORENSICS_PASSWORD:?PG_FORENSICS_PASSWORD is required (see .env.example)}
+      PG_GATEWAY_PASSWORD: ${PG_GATEWAY_PASSWORD:?PG_GATEWAY_PASSWORD is required (see .env.example)}
+      PG_ANOMALY_PASSWORD: ${PG_ANOMALY_PASSWORD:?PG_ANOMALY_PASSWORD is required (see .env.example)}
+      PG_DJANGO_PASSWORD: ${PG_DJANGO_PASSWORD:?PG_DJANGO_PASSWORD is required (see .env.example)}
+      PG_KEYCLOAK_PASSWORD: ${PG_KEYCLOAK_PASSWORD:?PG_KEYCLOAK_PASSWORD is required (see .env.example)}
+    volumes:
+      - ./scripts/db:/aztdp/scripts/db:ro
+      - ./infra/postgres:/aztdp/infra/postgres:ro
+    restart: "no"
+    networks:
+      - aztdp
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   redis:
     image: redis:7.2-alpine
@@ -63,9 +94,10 @@ services:
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
       KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://postgres:5432/aztdp
-      KC_DB_USERNAME: aztdp
-      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (see .env.example)}
+      # Own database and role (db-migrate): a Keycloak compromise cannot reach audit data.
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${PG_KEYCLOAK_PASSWORD:?PG_KEYCLOAK_PASSWORD is required (see .env.example)}
       # Issuer must match AZTDP_OIDC_ISSUER. Keycloak is not published to the
       # host and is reachable only on the private network, so plain HTTP stays
       # enabled for service-to-service JWKS fetches; external clients would
@@ -79,8 +111,8 @@ services:
     networks:
       - aztdp
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/9000; printf \"GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n\" >&3; read -r status <&3; case \"$$status\" in *\" 200 \"*) exit 0 ;; *) exit 1 ;; esac' "]
       interval: 15s
@@ -114,7 +146,9 @@ services:
       AZTDP_TELEMETRY_URL: http://telemetry-ingest:8080
       AZTDP_FAIL_OPEN: "false"
       AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
-      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED:?POSTGRES_PASSWORD_URLENCODED is required (URL-encoded POSTGRES_PASSWORD)}@postgres:5432/aztdp
+      # Password via libpq's PGPASSWORD, so it never needs URL-encoding.
+      AZTDP_DB_URL: postgresql://aztdp_gateway@postgres:5432/aztdp
+      PGPASSWORD: ${PG_GATEWAY_PASSWORD:?PG_GATEWAY_PASSWORD is required (see .env.example)}
     networks:
       - aztdp
     depends_on:
@@ -122,8 +156,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 10s
@@ -155,7 +189,9 @@ services:
     build: ./services/anomaly-service
     environment:
       AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED:?REDIS_PASSWORD_URLENCODED is required (URL-encoded REDIS_PASSWORD)}@redis:6379/0
-      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED:?POSTGRES_PASSWORD_URLENCODED is required (URL-encoded POSTGRES_PASSWORD)}@postgres:5432/aztdp
+      # Password via libpq's PGPASSWORD, so it never needs URL-encoding.
+      AZTDP_DB_URL: postgresql://aztdp_anomaly@postgres:5432/aztdp
+      PGPASSWORD: ${PG_ANOMALY_PASSWORD:?PG_ANOMALY_PASSWORD is required (see .env.example)}
       AZTDP_MODEL_DIR: /app/models
       AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
     volumes:
@@ -165,8 +201,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 10s
@@ -179,13 +215,15 @@ services:
     tmpfs:
       - /tmp
     environment:
-      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED:?POSTGRES_PASSWORD_URLENCODED is required (URL-encoded POSTGRES_PASSWORD)}@postgres:5432/aztdp
+      # Password via libpq's PGPASSWORD, so it never needs URL-encoding.
+      AZTDP_DB_URL: postgresql://aztdp_ingest@postgres:5432/aztdp
+      PGPASSWORD: ${PG_INGEST_PASSWORD:?PG_INGEST_PASSWORD is required (see .env.example)}
       AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
     networks:
       - aztdp
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 10s
@@ -198,13 +236,15 @@ services:
     tmpfs:
       - /tmp
     environment:
-      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED:?POSTGRES_PASSWORD_URLENCODED is required (URL-encoded POSTGRES_PASSWORD)}@postgres:5432/aztdp
+      # Password via libpq's PGPASSWORD, so it never needs URL-encoding.
+      AZTDP_DB_URL: postgresql://aztdp_forensics@postgres:5432/aztdp
+      PGPASSWORD: ${PG_FORENSICS_PASSWORD:?PG_FORENSICS_PASSWORD is required (see .env.example)}
       AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
     networks:
       - aztdp
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 10s
@@ -224,9 +264,11 @@ services:
       AZTDP_ALLOWED_HOSTS: ${AZTDP_ALLOWED_HOSTS:?AZTDP_ALLOWED_HOSTS is required, comma-separated hostnames (see .env.example)}
       AZTDP_TIMEOUT_CONNECT: "1.0"
       AZTDP_DB_HOST: postgres
-      AZTDP_DB_NAME: aztdp
-      AZTDP_DB_USER: aztdp
-      AZTDP_DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (see .env.example)}
+      # Own database (owned by aztdp_django) so `migrate` has DDL rights without
+      # any access to the audit tables in the aztdp database.
+      AZTDP_DB_NAME: aztdp_django
+      AZTDP_DB_USER: aztdp_django
+      AZTDP_DB_PASSWORD: ${PG_DJANGO_PASSWORD:?PG_DJANGO_PASSWORD is required (see .env.example)}
       AZTDP_DB_PORT: "5432"
       AZTDP_OIDC_ISSUER: http://keycloak:8080/realms/aztdp
       AZTDP_JWKS_URL: http://keycloak:8080/realms/aztdp/protocol/openid-connect/certs
@@ -259,8 +301,7 @@ services:
       risk-engine:
         condition: service_healthy
 
-  # One-shot schema migration. Task 8 will add a db-migrate service that this
-  # should additionally wait for; for now it only needs postgres.
+  # One-shot Django schema migration (its own database, created by db-migrate).
   django-migrate:
     build: ./services/django-app
     environment: *django-env
@@ -271,8 +312,8 @@ services:
     networks:
       - aztdp
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
 
   spring-app:
     build: ./services/spring-app
