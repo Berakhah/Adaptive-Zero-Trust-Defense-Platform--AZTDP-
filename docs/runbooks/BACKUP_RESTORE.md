@@ -54,7 +54,7 @@ docker compose exec pg-backup /backup.sh
 
 ## Verify backups
 
-Automated, throwaway, safe to run anywhere Docker runs (own compose project, no
+Automated and throwaway (own compose project, no
 host ports, removes everything on exit):
 
 ```
@@ -77,23 +77,75 @@ docker compose exec pg-backup sh -c 'cd /backups/daily/$(ls /backups/daily | sor
 
 ## Restore (production)
 
-1. Stop writers: `docker compose stop nginx gateway telemetry-ingest forensics anomaly-detection django keycloak`
-   (keep `postgres` running; stop `pg-backup` too so retention cannot prune).
-2. Pick the set: `docker compose run --rm --no-deps pg-backup ls /backups/daily`.
-3. Into a **fresh, empty** cluster (new `postgres_data` volume, same
-   `POSTGRES_USER`/`POSTGRES_PASSWORD`, `POSTGRES_DB=postgres`), as the postgres
-   superuser:
+Run from the repo root with the same env file / `COMPOSE_PROJECT_NAME` as the
+deployment (`P` below is the compose project name, `docker compose config | head -1`
+shows it). **This destroys the current `postgres_data` volume**: only do it when
+the live database is lost or unusable, and only after a final look at what is on
+the `pg_backups` volume. `pg_backups` is never touched by `down` (no `-v`).
+
+1. Stop everything, including `pg-backup` (so retention cannot prune while you
+   work) and all Postgres clients. Volumes are kept:
    ```
-   SET=/backups/daily/<timestamp>
-   (cd $SET && sha256sum -c SHA256SUMS)
-   psql -U aztdp -d postgres -f $SET/globals.sql     # "role aztdp already exists" is expected
-   for db in aztdp keycloak aztdp_django; do
-     pg_restore --create --exit-on-error -U aztdp -d postgres $SET/$db.dump
-   done
+   docker compose down
    ```
-4. Run `db-migrate` (idempotent; re-asserts roles, passwords, grants).
-5. Start the services; restart the gateway so it resyncs revocations to Redis.
-6. Confirm immutability still holds (`bash scripts/db/tests/test_roles.sh`).
+2. Wipe the Postgres data volume and start an empty cluster. Compose creates
+   the empty `aztdp` database (`POSTGRES_DB`) and the bootstrap role:
+   ```
+   docker volume rm "${P}_postgres_data"
+   docker compose up -d --wait postgres
+   ```
+3. List the available sets (a one-off `pg-backup` container: it has the
+   `pg_backups` volume, the pg_* tools and the superuser `PGPASSWORD`;
+   `--entrypoint` bypasses the backup loop, which would otherwise take a backup):
+   ```
+   docker compose run --rm --no-deps --entrypoint ls pg-backup /backups/daily
+   ```
+4. Restore the newest set (set `SET=/backups/daily/<timestamp>` instead of the
+   `ls | tail` line to pick another). Globals first (roles), then the empty
+   `aztdp` database is dropped so `pg_restore --create` can recreate it with its
+   original owner and ACLs, then the three databases:
+   ```
+   docker compose run --rm --no-deps --entrypoint sh pg-backup -eu -c '
+     SET=$(ls -1d /backups/daily/*/ | sort | tail -1)
+     echo "restoring $SET"
+     (cd "$SET" && sha256sum -c SHA256SUMS)
+     # "role aztdp already exists" is expected (bootstrap role); nothing else is
+     psql -X -q -d postgres -f "$SET/globals.sql" 2>/tmp/globals.err || true
+     if grep ERROR /tmp/globals.err | grep -qv "already exists"; then cat /tmp/globals.err >&2; exit 4; fi
+     psql -X -q -d postgres -c "DROP DATABASE IF EXISTS aztdp"   # fresh, empty cluster only
+     for db in aztdp keycloak aztdp_django; do
+       pg_restore --create --exit-on-error -d postgres "$SET/$db.dump"
+     done
+   '
+   ```
+5. Run `db-migrate` (idempotent: versions already in `schema_migrations` are
+   skipped; it re-asserts role passwords and grants from the current `.env`):
+   ```
+   docker compose up --no-deps db-migrate
+   ```
+6. Verify the audit immutability triggers and grants survived (as the
+   superuser, so this proves the trigger, not just grants; both must fail with
+   "append-only"):
+   ```
+   docker compose exec -T postgres psql -U aztdp -d aztdp -c "UPDATE audit_events SET service=service"
+   docker compose exec -T postgres psql -U aztdp -d aztdp -c "TRUNCATE audit_events"
+   docker compose exec -T postgres psql -U aztdp -d aztdp -tAc "SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgname LIKE 'audit_events_immutable%'"
+   ```
+   For the full privilege suite run `bash scripts/db/tests/test_roles.sh`
+   (it writes probe rows: use it on a rehearsal, not on the recovered
+   production database).
+7. Start the rest of the stack and restart the gateway so it re-syncs
+   token revocations from Postgres into the (empty) Redis:
+   ```
+   docker compose up -d
+   docker compose restart gateway
+   ```
+
+Coverage: `scripts/backup/pg_restore_test.sh` automates the same restore commands
+(globals, then `pg_restore --create` per database) into a throwaway container
+and the post-restore checks; the in-place wrapper (steps 1-3, 5, 7: volume wipe,
+one-off `pg-backup` container, `db-migrate`, service restart) is covered by a
+manual rehearsal recorded in the task report, not by CI.
 
 ## Measured restore time
 
