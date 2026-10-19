@@ -9,6 +9,9 @@ networks:
 
 volumes:
   postgres_data:
+  # Backup sets (infra/pg-backup). Same host as postgres_data: NOT disaster
+  # recovery until copied off-host (docs/runbooks/BACKUP_RESTORE.md).
+  pg_backups:
   redis_data:
   grafana_data:
   anomaly_models:
@@ -78,6 +81,33 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  # Daily pg_dump of all databases + roles into the pg_backups volume; 7 daily /
+  # 4 weekly retention. Redis is intentionally not backed up (rebuilt from
+  # Postgres). No published ports. Verified by scripts/backup/pg_restore_test.sh.
+  pg-backup:
+    build: ./infra/pg-backup
+    # Bootstrap superuser: pg_dumpall needs it to read role password hashes.
+    environment:
+      PGHOST: postgres
+      PGUSER: aztdp
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (see .env.example)}
+    volumes:
+      - pg_backups:/backups
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    networks:
+      - aztdp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
 
   redis:
     image: redis:7.2-alpine
