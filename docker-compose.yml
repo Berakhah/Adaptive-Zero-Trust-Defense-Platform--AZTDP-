@@ -6,6 +6,7 @@ networks:
 
 volumes:
   postgres_data:
+  redis_data:
   grafana_data:
   anomaly_models:
   prometheus_data:
@@ -25,8 +26,6 @@ services:
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
       - ./scripts/db/schema.sql:/docker-entrypoint-initdb.d/02_schema.sql:ro
       - ./infra/postgres/03_grants.sql:/docker-entrypoint-initdb.d/03_grants.sql:ro
-    ports:
-      - "5432:5432"
     networks:
       - aztdp
     healthcheck:
@@ -37,15 +36,16 @@ services:
 
   redis:
     image: redis:7.2-alpine
-    command: redis-server /usr/local/etc/redis/redis.conf
+    command: ["sh", "-c", "redis-server /usr/local/etc/redis/redis.conf --requirepass \"$$REDIS_PASSWORD\""]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
     volumes:
       - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
-    ports:
-      - "6379:6379"
+      - redis_data:/data
     networks:
       - aztdp
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -68,9 +68,6 @@ services:
     command: ["start-dev", "--import-realm"]
     volumes:
       - ./infra/keycloak:/opt/keycloak/data/import:ro
-    ports:
-      - "8080:8080"
-      - "9000:9000"
     networks:
       - aztdp
     depends_on:
@@ -88,8 +85,6 @@ services:
     command: ["run", "--server", "--addr", "0.0.0.0:8181", "/policies"]
     volumes:
       - ./policies:/policies:ro
-    ports:
-      - "8181:8181"
     networks:
       - aztdp
     healthcheck:
@@ -104,13 +99,11 @@ services:
     build: ./services/gateway
     environment:
       AZTDP_OPA_URL: http://opa:8181
-      AZTDP_REDIS_URL: redis://redis:6379/0
+      AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED}@redis:6379/0
       AZTDP_TELEMETRY_URL: http://telemetry-ingest:8080
       AZTDP_FAIL_OPEN: "false"
       AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
       AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
-    ports:
-      - "8000:8080"
     networks:
       - aztdp
     depends_on:
@@ -129,12 +122,10 @@ services:
   risk-engine:
     build: ./services/risk-engine
     environment:
-      AZTDP_REDIS_URL: redis://redis:6379/0
+      AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED}@redis:6379/0
       AZTDP_ANOMALY_URL: http://anomaly-service:8080
       AZTDP_TELEMETRY_URL: http://telemetry-ingest:8080
       AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
-    ports:
-      - "8001:8080"
     networks:
       - aztdp
     depends_on:
@@ -149,14 +140,12 @@ services:
   anomaly-service:
     build: ./services/anomaly-service
     environment:
-      AZTDP_REDIS_URL: redis://redis:6379/0
+      AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED}@redis:6379/0
       AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
       AZTDP_MODEL_DIR: /app/models
       AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
     volumes:
       - anomaly_models:/app/models
-    ports:
-      - "8002:8080"
     networks:
       - aztdp
     depends_on:
@@ -175,8 +164,6 @@ services:
     environment:
       AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
       AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
-    ports:
-      - "8003:8080"
     networks:
       - aztdp
     depends_on:
@@ -193,8 +180,6 @@ services:
     environment:
       AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
       AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
-    ports:
-      - "8004:8080"
     networks:
       - aztdp
     depends_on:
@@ -231,8 +216,6 @@ services:
     command: >
       sh -c "python manage.py migrate --noinput &&
              gunicorn aztdp_django.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 30"
-    ports:
-      - "8010:8000"
     networks:
       - aztdp
     depends_on:
@@ -254,8 +237,6 @@ services:
       AZTDP_OIDC_ISSUER: http://keycloak:8080/realms/aztdp
       AZTDP_FAIL_OPEN: "false"
       AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
-    ports:
-      - "8011:8082"
     networks:
       - aztdp
     depends_on:
@@ -278,12 +259,14 @@ services:
       - "443:443"
       - "8443:8443"
       - "3443:3443"
+      - "9443:9443"
     networks:
       - aztdp
     depends_on:
       - django-app
       - spring-app
       - grafana
+      - dashboard
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/"]
       interval: 10s
@@ -304,8 +287,6 @@ services:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./infra/prometheus/rules:/etc/prometheus/rules:ro
       - prometheus_data:/prometheus
-    ports:
-      - "9090:9090"
     networks:
       - aztdp
 
@@ -320,8 +301,6 @@ services:
       - grafana_data:/var/lib/grafana
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
-    ports:
-      - "3000:3000"
     networks:
       - aztdp
     depends_on:
@@ -343,8 +322,6 @@ services:
       AZTDP_PASSWORD_LIST: wrong1,wrong2,wrong3,password
       AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
       AZTDP_REQUEST_DELAY_MS: "200"
-    ports:
-      - "8090:8090"
     networks:
       - aztdp
     depends_on:
@@ -367,8 +344,6 @@ services:
       # Full htpasswd line (user:hash), e.g. `echo "soc:$(openssl passwd -apr1)"`.
       # Single-quote it in .env so the $ characters are not interpolated.
       DASHBOARD_HTPASSWD: ${DASHBOARD_HTPASSWD}
-    ports:
-      - "8099:8099"
     networks:
       - aztdp
     depends_on:

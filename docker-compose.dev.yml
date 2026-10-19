@@ -1,0 +1,50 @@
+# Local development overrides: re-publishes service ports on loopback only.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"
+  keycloak:
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:9000:9000"
+  opa:
+    ports:
+      - "127.0.0.1:8181:8181"
+  gateway:
+    ports:
+      - "127.0.0.1:8000:8080"
+  risk-engine:
+    ports:
+      - "127.0.0.1:8001:8080"
+  anomaly-service:
+    ports:
+      - "127.0.0.1:8002:8080"
+  telemetry-ingest:
+    ports:
+      - "127.0.0.1:8003:8080"
+  forensics:
+    ports:
+      - "127.0.0.1:8004:8080"
+  django-app:
+    ports:
+      - "127.0.0.1:8010:8000"
+  spring-app:
+    ports:
+      - "127.0.0.1:8011:8082"
+  prometheus:
+    ports:
+      - "127.0.0.1:9090:9090"
+  grafana:
+    ports:
+      - "127.0.0.1:3000:3000"
+  attack-sim:
+    ports:
+      - "127.0.0.1:8090:8090"
+  dashboard:
+    ports:
+      - "127.0.0.1:8099:8099"
