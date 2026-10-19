@@ -19,10 +19,12 @@ Applied by migration `scripts/db/migrations/V2__audit_partitioning.sql` (run by 
 
 ## Immutability
 
-`audit_events` (every partition, including ones created later) and `audit_events_cold` are append-only:
+Service roles cannot modify, erase or truncate audit rows in `audit_events` (every partition, including ones created later) or `audit_events_cold`:
 
 - **Grants** (`infra/postgres/05_grants.sql`): `aztdp_ingest` has `INSERT` only; `aztdp_forensics` has `SELECT` only; no service role holds `UPDATE`, `DELETE` or `TRUNCATE`, and no service role has any privilege on individual partitions.
-- **Trigger** (`scripts/db/migrations/V3__audit_immutability.sql`): `audit_events_immutable` / `audit_events_no_truncate` (and the `_cold` equivalents) raise `insufficient_privilege` on `UPDATE`, `DELETE` or `TRUNCATE` for every role, superusers included, except `aztdp_owner`. Only the retention procedures below run as `aztdp_owner`.
+- **Triggers** (`scripts/db/migrations/V3__audit_immutability.sql`, `V4__audit_partition_truncate_guard.sql`): `audit_events_immutable` (row-level, cloned to every partition), `audit_events_no_truncate` (parent), `audit_partition_no_truncate` (on each partition, added by `aztdp_audit_ensure_partition` for new ones) and the `audit_events_cold_*` equivalents raise `insufficient_privilege` on `UPDATE`, `DELETE` or `TRUNCATE` for every role except `aztdp_owner`. That includes plain statements from the bootstrap superuser. Only the retention procedures below run as `aztdp_owner`.
+
+**Limitation (break-glass roles).** `aztdp_owner` (owns the tables) and the bootstrap superuser (`POSTGRES_USER`) can bypass the triggers: `ALTER TABLE ... DISABLE TRIGGER`, `SET session_replication_role = replica`, or dropping the trigger. The database cannot make itself tamper-proof against them. Tamper-evidence against these roles needs external controls: ship audit rows or WAL/logs to write-once storage outside the database's trust boundary, and/or hash-chain rows so gaps and edits are detectable. Keep both credentials out of every service and restrict them to migrations and incident break-glass.
 
 Verify with `bash scripts/db/tests/test_roles.sh`.
 

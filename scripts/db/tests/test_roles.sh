@@ -114,7 +114,12 @@ expect_ok "keycloak can create tables in its own db" keycloak \
   "CREATE TABLE IF NOT EXISTS t_probe(id int); DROP TABLE t_probe" keycloak
 expect_denied "service roles cannot create objects in aztdp" aztdp_ingest "CREATE TABLE t_probe(id int)" "$PERM"
 
-# ── immutability trigger: binds everyone except aztdp_owner, even superusers ─
+# ── immutability trigger ─────────────────────────────────────────────────────
+# The trigger fires for every role except aztdp_owner, so plain UPDATE/DELETE/
+# TRUNCATE from the bootstrap superuser is refused too. It is NOT a control
+# against the owner or a superuser: both can DISABLE TRIGGER or set
+# session_replication_role=replica (documented limitation; needs external
+# tamper-evidence). Service roles are covered by grants AND the trigger.
 SU=$("${DC[@]}" exec -T postgres sh -c 'printf %s "$POSTGRES_USER"')
 expect_denied "trigger blocks superuser UPDATE" "$SU" "UPDATE audit_events SET service='x'" "$IMMUTABLE"
 expect_denied "trigger blocks superuser DELETE" "$SU" "DELETE FROM audit_events" "$IMMUTABLE"
@@ -122,8 +127,9 @@ expect_denied "trigger blocks superuser TRUNCATE" "$SU" "TRUNCATE audit_events" 
 # Row triggers only fire on rows, so seed the (normally empty) cold archive first.
 expect_ok "owner can append to audit_events_cold" aztdp_owner "INSERT INTO audit_events_cold(event_type,service) VALUES ('risk_eval','t')"
 expect_denied "trigger blocks superuser UPDATE audit_events_cold" "$SU" "UPDATE audit_events_cold SET service='x'" "$IMMUTABLE"
-expect_ok "owner is exempt (retention maintenance)" aztdp_owner \
-  "BEGIN; UPDATE audit_events SET service=service WHERE false; ROLLBACK"
+# Owner exemption on a real row (rolled back), not a vacuous WHERE false.
+n=$(q aztdp_owner aztdp "BEGIN; WITH u AS (UPDATE audit_events SET service=service WHERE id=(SELECT max(id) FROM audit_events) RETURNING 1) SELECT count(*) FROM u; ROLLBACK")
+[ "$n" = "1" ] && pass "owner is exempt (retention maintenance): updated 1 real row" || fail "owner UPDATE on a real row: $n"
 
 # ── partitioning + partitions created after migration ────────────────────────
 if "${DC[@]}" exec -T postgres psql -X -U aztdp_owner -d aztdp -c '\d+ audit_events' | grep -qi 'Partition key: RANGE (occurred_at)'; then
@@ -153,12 +159,21 @@ expect_denied "new partition: superuser UPDATE blocked" "$SU" "UPDATE audit_even
 expect_denied "new partition: ingest has no direct access" aztdp_ingest \
   "INSERT INTO audit_events_$FUTURE(event_type,service,occurred_at) VALUES ('risk_eval','t',date_trunc('month', now() + interval '8 months'))" "$PERM"
 expect_denied "new partition: forensics has no direct access" aztdp_forensics "SELECT 1 FROM audit_events_$FUTURE" "$PERM"
+# TRUNCATE on individual partitions: statement triggers are not cloned from
+# the parent, so each partition needs its own (V4 + aztdp_audit_ensure_partition).
+CUR=$(q aztdp_owner aztdp "SELECT 'audit_events_' || to_char(now() AT TIME ZONE 'UTC', 'YYYY_MM')")
+expect_denied "superuser TRUNCATE monthly partition $CUR blocked" "$SU" "TRUNCATE $CUR" "$IMMUTABLE"
+expect_denied "superuser TRUNCATE audit_events_default blocked" "$SU" "TRUNCATE audit_events_default" "$IMMUTABLE"
+expect_denied "superuser TRUNCATE post-migration partition audit_events_$FUTURE blocked" "$SU" "TRUNCATE audit_events_$FUTURE" "$IMMUTABLE"
+expect_denied "superuser TRUNCATE audit_events_cold blocked" "$SU" "TRUNCATE audit_events_cold" "$IMMUTABLE"
+expect_denied "ingest TRUNCATE partition $CUR denied" aztdp_ingest "TRUNCATE $CUR" "$PERM"
 expect_denied "procedures not executable by service roles" aztdp_ingest "CALL aztdp_audit_maintenance()" "$PERM"
 
 # ── migrations: recorded once, re-run is a no-op ─────────────────────────────
 before=$(q aztdp_owner aztdp "SELECT string_agg(version||'@'||applied_at, ',' ORDER BY version) FROM schema_migrations")
-echo "$before" | grep -q 'V1@' && echo "$before" | grep -q 'V2@' && echo "$before" | grep -q 'V3@' \
-  && pass "schema_migrations records V1,V2,V3" || fail "schema_migrations incomplete: $before"
+missing=""
+for v in V1 V2 V3 V4; do echo "$before" | grep -q "$v@" || missing="$missing $v"; done
+[ -z "$missing" ] && pass "schema_migrations records V1..V4" || fail "schema_migrations missing:$missing ($before)"
 if out=$("${DC[@]}" run --rm --no-deps db-migrate 2>&1); then
   after=$(q aztdp_owner aztdp "SELECT string_agg(version||'@'||applied_at, ',' ORDER BY version) FROM schema_migrations")
   [ "$before" = "$after" ] && pass "db-migrate re-run is idempotent" || fail "re-run changed schema_migrations: $before -> $after"

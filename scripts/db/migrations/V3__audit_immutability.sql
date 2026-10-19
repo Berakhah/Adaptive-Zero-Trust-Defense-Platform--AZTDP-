@@ -1,14 +1,19 @@
 -- V3: make audit_events and audit_events_cold append-only.
 --
 -- Table grants already deny UPDATE/DELETE/TRUNCATE to every service role
--- (infra/postgres/05_grants.sql). This trigger is the second layer: it binds
--- every role, including superusers who bypass grants, except aztdp_owner, which
--- runs the retention procedures (aztdp_audit_ensure_partition moves rows out of
--- the default partition; aztdp_audit_maintenance archives old partitions).
+-- (infra/postgres/05_grants.sql). This trigger is the second layer: it fires
+-- for every role except aztdp_owner, which runs the retention procedures
+-- (aztdp_audit_ensure_partition moves rows out of the default partition;
+-- aztdp_audit_maintenance archives old partitions). Service roles therefore
+-- cannot modify, erase or truncate audit rows. aztdp_owner and the bootstrap
+-- superuser are break-glass roles and CAN bypass it (DISABLE TRIGGER,
+-- session_replication_role = replica); tamper-evidence against them needs
+-- external controls (log shipping / hash chaining).
 --
 -- Row triggers on a partitioned table (PG13+) are cloned to every existing
 -- partition and to partitions created or attached later, including
--- audit_events_default.
+-- audit_events_default. The statement-level TRUNCATE trigger below is NOT
+-- cloned; V4 adds a TRUNCATE guard to each partition.
 
 CREATE FUNCTION aztdp_audit_immutable() RETURNS trigger
 LANGUAGE plpgsql AS $$
