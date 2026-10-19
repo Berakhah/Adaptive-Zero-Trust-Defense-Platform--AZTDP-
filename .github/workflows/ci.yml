@@ -113,7 +113,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bring up stack
-        run: docker compose up -d --build
+        run: docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml --profile sim up -d --build
       - name: Wait for services
         run: |
           for i in {1..60}; do
@@ -125,7 +125,7 @@ jobs:
             fi
             sleep 5
           done
-          docker compose logs
+          docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml --profile sim logs
           exit 1
       - name: Run attack sim tests
         env:
@@ -141,7 +141,7 @@ jobs:
           pytest services/attack-sim/test_attack_outcomes.py -ra
       - name: Dump logs on failure
         if: failure()
-        run: docker compose logs --tail=200
+        run: docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml --profile sim logs --tail=200
       - name: Tear down
         if: always()
-        run: docker compose down -v
+        run: docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml --profile sim down -v

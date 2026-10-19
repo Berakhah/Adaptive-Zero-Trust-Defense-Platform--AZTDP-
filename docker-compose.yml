@@ -1,8 +1,11 @@
-version: "3.8"
-
 networks:
   aztdp:
     driver: bridge
+    # Pinned so nginx (the only trusted proxy) has a stable address. Django and
+    # Spring trust client-IP/geo headers only from that single address.
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
 
 volumes:
   postgres_data:
@@ -20,7 +23,7 @@ services:
     environment:
       POSTGRES_DB: aztdp
       POSTGRES_USER: aztdp
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (see .env.example)}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
@@ -38,7 +41,7 @@ services:
     image: redis:7.2-alpine
     command: ["sh", "-c", "redis-server /usr/local/etc/redis/redis.conf --requirepass \"$$REDIS_PASSWORD\""]
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required (see .env.example)}
     volumes:
       - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
       - redis_data:/data
@@ -51,23 +54,28 @@ services:
       retries: 5
 
   keycloak:
-    image: quay.io/keycloak/keycloak:25.0
+    build: ./infra/keycloak
     environment:
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD is required (see .env.example)}
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD is required (see .env.example)}
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/aztdp
       KC_DB_USERNAME: aztdp
-      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
-      KC_HOSTNAME_STRICT: "false"
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (see .env.example)}
+      # Issuer must match AZTDP_OIDC_ISSUER. Keycloak is not published to the
+      # host and is reachable only on the private network, so plain HTTP stays
+      # enabled for service-to-service JWKS fetches; external clients would
+      # reach it only through a TLS ingress that sets X-Forwarded-*.
+      KC_HOSTNAME: ${KC_HOSTNAME:-http://keycloak:8080}
+      KC_PROXY_HEADERS: xforwarded
       KC_HTTP_ENABLED: "true"
-    command: ["start-dev", "--import-realm"]
-    volumes:
-      - ./infra/keycloak:/opt/keycloak/data/import:ro
+      # Substituted into the realm import (infra/keycloak/aztdp-realm.json).
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:?KEYCLOAK_CLIENT_SECRET is required (see .env.example)}
+    command: ["start", "--optimized", "--import-realm"]
     networks:
       - aztdp
     depends_on:
@@ -99,11 +107,11 @@ services:
     build: ./services/gateway
     environment:
       AZTDP_OPA_URL: http://opa:8181
-      AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED}@redis:6379/0
+      AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED:?REDIS_PASSWORD_URLENCODED is required (URL-encoded REDIS_PASSWORD)}@redis:6379/0
       AZTDP_TELEMETRY_URL: http://telemetry-ingest:8080
       AZTDP_FAIL_OPEN: "false"
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
-      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
+      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED:?POSTGRES_PASSWORD_URLENCODED is required (URL-encoded POSTGRES_PASSWORD)}@postgres:5432/aztdp
     networks:
       - aztdp
     depends_on:
@@ -122,10 +130,10 @@ services:
   risk-engine:
     build: ./services/risk-engine
     environment:
-      AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED}@redis:6379/0
+      AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED:?REDIS_PASSWORD_URLENCODED is required (URL-encoded REDIS_PASSWORD)}@redis:6379/0
       AZTDP_ANOMALY_URL: http://anomaly-service:8080
       AZTDP_TELEMETRY_URL: http://telemetry-ingest:8080
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
     networks:
       - aztdp
     depends_on:
@@ -140,10 +148,10 @@ services:
   anomaly-service:
     build: ./services/anomaly-service
     environment:
-      AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED}@redis:6379/0
-      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
+      AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED:?REDIS_PASSWORD_URLENCODED is required (URL-encoded REDIS_PASSWORD)}@redis:6379/0
+      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED:?POSTGRES_PASSWORD_URLENCODED is required (URL-encoded POSTGRES_PASSWORD)}@postgres:5432/aztdp
       AZTDP_MODEL_DIR: /app/models
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
     volumes:
       - anomaly_models:/app/models
     networks:
@@ -162,8 +170,8 @@ services:
   telemetry-ingest:
     build: ./services/telemetry-ingest
     environment:
-      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED:?POSTGRES_PASSWORD_URLENCODED is required (URL-encoded POSTGRES_PASSWORD)}@postgres:5432/aztdp
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
     networks:
       - aztdp
     depends_on:
@@ -178,8 +186,8 @@ services:
   forensics:
     build: ./services/forensics
     environment:
-      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED:?POSTGRES_PASSWORD_URLENCODED is required (URL-encoded POSTGRES_PASSWORD)}@postgres:5432/aztdp
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
     networks:
       - aztdp
     depends_on:
@@ -196,14 +204,14 @@ services:
   django-app:
     build: ./services/django-app
     environment:
-      AZTDP_SECRET_KEY: ${AZTDP_SECRET_KEY}
-      AZTDP_DEBUG: "true"
-      AZTDP_ALLOWED_HOSTS: ${AZTDP_ALLOWED_HOSTS:-localhost,127.0.0.1,django-app}
+      AZTDP_SECRET_KEY: ${AZTDP_SECRET_KEY:?AZTDP_SECRET_KEY is required, >=32 random chars (see .env.example)}
+      AZTDP_DEBUG: "false"
+      AZTDP_ALLOWED_HOSTS: ${AZTDP_ALLOWED_HOSTS:?AZTDP_ALLOWED_HOSTS is required, comma-separated hostnames (see .env.example)}
       AZTDP_TIMEOUT_CONNECT: "1.0"
       AZTDP_DB_HOST: postgres
       AZTDP_DB_NAME: aztdp
       AZTDP_DB_USER: aztdp
-      AZTDP_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      AZTDP_DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (see .env.example)}
       AZTDP_DB_PORT: "5432"
       AZTDP_OIDC_ISSUER: http://keycloak:8080/realms/aztdp
       AZTDP_JWKS_URL: http://keycloak:8080/realms/aztdp/protocol/openid-connect/certs
@@ -212,10 +220,12 @@ services:
       AZTDP_POLICY_GATEWAY_URL: http://gateway:8080
       AZTDP_TOKEN_REVOKE_URL: http://gateway:8080/v1/tokens/revoke
       AZTDP_FAIL_OPEN: "false"
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
-      AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED}@redis:6379/0
-      AZTDP_STEPUP_SIGNING_KEY: ${AZTDP_STEPUP_SIGNING_KEY}
-      AZTDP_TOTP_MASTER_SECRET: ${AZTDP_TOTP_MASTER_SECRET}
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
+      AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED:?REDIS_PASSWORD_URLENCODED is required (URL-encoded REDIS_PASSWORD)}@redis:6379/0
+      AZTDP_STEPUP_SIGNING_KEY: ${AZTDP_STEPUP_SIGNING_KEY:?AZTDP_STEPUP_SIGNING_KEY is required (see .env.example)}
+      AZTDP_TOTP_MASTER_SECRET: ${AZTDP_TOTP_MASTER_SECRET:?AZTDP_TOTP_MASTER_SECRET is required (see .env.example)}
+      # Only nginx may assert client IP / geo.
+      AZTDP_TRUSTED_PROXIES: 172.28.0.10/32
     command: >
       sh -c "python manage.py migrate --noinput &&
              gunicorn aztdp_django.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 30"
@@ -241,7 +251,8 @@ services:
       AZTDP_TOKEN_REVOKE_URL: http://gateway:8080/v1/tokens/revoke
       AZTDP_OIDC_ISSUER: http://keycloak:8080/realms/aztdp
       AZTDP_FAIL_OPEN: "false"
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
+      AZTDP_TRUSTED_PROXIES: 172.28.0.10/32
     networks:
       - aztdp
     depends_on:
@@ -266,7 +277,8 @@ services:
       - "3443:3443"
       - "9443:9443"
     networks:
-      - aztdp
+      aztdp:
+        ipv4_address: 172.28.0.10
     depends_on:
       - django-app
       - spring-app
@@ -299,7 +311,7 @@ services:
     image: grafana/grafana:11.1.0
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required (see .env.example)}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/policy-decisions.json
     volumes:
@@ -311,44 +323,15 @@ services:
     depends_on:
       - prometheus
 
-  # ── Attack Simulation API ─────────────────────────────────────────────────────
-
-  attack-sim:
-    build: ./services/attack-sim
-    environment:
-      AZTDP_BASE_URL: http://django-app:8000
-      AZTDP_KEYCLOAK_TOKEN_URL: http://keycloak:8080/realms/aztdp/protocol/openid-connect/token
-      AZTDP_CLIENT_ID: aztdp-client
-      AZTDP_CLIENT_SECRET: aztdp-secret
-      AZTDP_USERNAME: risk_user
-      AZTDP_PASSWORD: password
-      AZTDP_ATTACK_USERNAME: user1
-      AZTDP_ATTACK_PASSWORD: password
-      AZTDP_PASSWORD_LIST: wrong1,wrong2,wrong3,password
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
-      AZTDP_REQUEST_DELAY_MS: "200"
-    networks:
-      - aztdp
-    depends_on:
-      gateway:
-        condition: service_healthy
-      keycloak:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8090/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   # ── SOC Dashboard ─────────────────────────────────────────────────────────────
 
   dashboard:
     build: ./services/dashboard
     environment:
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
       # Full htpasswd line (user:hash), e.g. `echo "soc:$(openssl passwd -apr1)"`.
       # Single-quote it in .env so the $ characters are not interpolated.
-      DASHBOARD_HTPASSWD: ${DASHBOARD_HTPASSWD}
+      DASHBOARD_HTPASSWD: ${DASHBOARD_HTPASSWD:?DASHBOARD_HTPASSWD is required, a full htpasswd line (see .env.example)}
     networks:
       - aztdp
     depends_on:
@@ -358,7 +341,6 @@ services:
       - anomaly-service
       - telemetry-ingest
       - prometheus
-      - attack-sim
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8099/healthz"]
       interval: 10s

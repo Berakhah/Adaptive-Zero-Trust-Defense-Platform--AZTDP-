@@ -43,9 +43,14 @@ http {
         }
 
         # Attack-sim SSE proxy (buffering disabled for streaming)
+        # attack-sim exists only under the dev "sim" profile. Resolve it lazily
+        # (variable + resolver) so this server starts when the host is absent.
         location /api/sim/ {
+            resolver 127.0.0.11 valid=10s ipv6=off;
+            set $sim_upstream attack-sim:8090;
             rewrite ^/api/sim/(.*) /$1 break;
-            proxy_pass http://attack-sim:8090;
+            proxy_pass http://$sim_upstream;
+            proxy_set_header X-Internal-Token "${AZTDP_INTERNAL_TOKEN}";
             proxy_set_header Host $host;
             proxy_set_header Authorization "";  # never forward the SOC basic-auth credentials
             proxy_set_header X-Real-IP $remote_addr;

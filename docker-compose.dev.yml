@@ -1,5 +1,15 @@
-# Local development overrides: re-publishes service ports on loopback only.
-# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+# Local development overrides: re-publishes service ports on loopback only,
+# runs Keycloak in dev mode with the seeded (password-grant) dev realm, turns
+# Django DEBUG on, and defines the attack simulator behind the "sim" profile.
+#
+# Usage:
+#   docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml up
+#   ... --profile sim up        # also start attack-sim
+#
+# The base file requires its secrets (${VAR:?}) and Compose evaluates those guards
+# before merging overrides, so the dev-only values live in .env.dev (committed,
+# public, clearly labeled) and are passed with --env-file. Nothing here is
+# usable in production.
 
 services:
   postgres:
@@ -9,6 +19,14 @@ services:
     ports:
       - "127.0.0.1:6379:6379"
   keycloak:
+    environment:
+      # Dev mode derives the issuer from the request host; no fixed hostname.
+      KC_HOSTNAME: !reset null
+      KC_HOSTNAME_STRICT: "false"
+    command: ["start-dev", "--import-realm"]
+    volumes:
+      # Dev realm (seeded users, password grant, wildcard redirects): never in prod.
+      - ./infra/keycloak/aztdp-realm.dev.json:/opt/keycloak/data/import/aztdp-realm.json:ro
     ports:
       - "127.0.0.1:8080:8080"
       - "127.0.0.1:9000:9000"
@@ -31,6 +49,8 @@ services:
     ports:
       - "127.0.0.1:8004:8080"
   django-app:
+    environment:
+      AZTDP_DEBUG: "true"
     ports:
       - "127.0.0.1:8010:8000"
   spring-app:
@@ -42,7 +62,36 @@ services:
   grafana:
     ports:
       - "127.0.0.1:3000:3000"
+  # Attack simulator: dev only, started with `--profile sim`.
   attack-sim:
+    profiles: ["sim"]
+    build: ./services/attack-sim
+    environment:
+      AZTDP_BASE_URL: http://django-app:8000
+      AZTDP_KEYCLOAK_TOKEN_URL: http://keycloak:8080/realms/aztdp/protocol/openid-connect/token
+      AZTDP_CLIENT_ID: aztdp-client
+      AZTDP_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      # Seeded users from aztdp-realm.dev.json (dev realm only).
+      AZTDP_USERNAME: risk_user
+      AZTDP_PASSWORD: password
+      AZTDP_ATTACK_USERNAME: user1
+      AZTDP_ATTACK_PASSWORD: password
+      AZTDP_PASSWORD_LIST: wrong1,wrong2,wrong3,password
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+      AZTDP_SIM_ORIGINS: http://localhost:8099,https://localhost:9443
+      AZTDP_REQUEST_DELAY_MS: "200"
+    networks:
+      - aztdp
+    depends_on:
+      gateway:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     ports:
       - "127.0.0.1:8090:8090"
   dashboard:

@@ -12,7 +12,10 @@ if str(BASE) not in sys.path:
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "aztdp_django.settings")
 os.environ.setdefault("AZTDP_DB_ENGINE", "django.db.backends.sqlite3")
 os.environ.setdefault("AZTDP_DB_NAME", ":memory:")
-os.environ.setdefault("AZTDP_SECRET_KEY", "test-secret")
+# Settings fail closed outside DEBUG: force a valid >=32 char key and allowed hosts
+# (scripts/run_tests.sh exports a short AZTDP_SECRET_KEY that would be rejected).
+os.environ["AZTDP_SECRET_KEY"] = "test-only-secret-key-" + "x" * 32
+os.environ["AZTDP_ALLOWED_HOSTS"] = "testserver,localhost"
 # Step-up secrets are required (fail-closed) outside DEBUG; supply test values.
 os.environ.setdefault("AZTDP_STEPUP_SIGNING_KEY", "test-signing-key")
 os.environ.setdefault("AZTDP_TOTP_MASTER_SECRET", "test-master-secret")

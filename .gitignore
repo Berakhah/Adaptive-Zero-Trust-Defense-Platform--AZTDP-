@@ -34,3 +34,5 @@ dist/
 .env.*
 !.env.example
 memories/
+# Committed dev-only defaults for docker-compose.dev.yml (no real secrets)
+!.env.dev

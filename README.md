@@ -45,8 +45,13 @@ See [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) for t
 ## Quick start
 
 ```bash
-# 1. Bring up the full 13-service stack
-docker compose up -d --build
+# 1. Bring up the dev stack. The base docker-compose.yml is the production
+#    profile: it publishes only the nginx ingress and refuses to start unless
+#    every secret is set (see .env.example). Local development uses the
+#    committed, dev-only values in .env.dev plus docker-compose.dev.yml
+#    (loopback ports, seeded Keycloak users, DEBUG on). Add
+#    `--profile sim` to also start the attack simulator.
+docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 # 2. Wait for Keycloak to import the realm (~60s)
 curl -sf http://localhost:8080/health/ready
@@ -93,7 +98,7 @@ Every service is environment-driven. Key shared variables:
 | Variable                   | Default                                       | Purpose                                      |
 |----------------------------|-----------------------------------------------|----------------------------------------------|
 | `AZTDP_FAIL_OPEN`          | `false`                                       | Per-service. `true` = allow on backend error |
-| `AZTDP_REDIS_URL`          | `redis://redis:6379/0`                        | Risk-engine + gateway shared store           |
+| `AZTDP_REDIS_URL`          | `redis://:<password>@redis:6379/0`            | Shared store; password required (`REDIS_PASSWORD_URLENCODED`) |
 | `AZTDP_DB_URL`             | `postgresql://aztdp:aztdp@postgres:5432/aztdp`| Telemetry, forensics, anomaly                |
 | `AZTDP_OPA_URL`            | `http://opa:8181`                             | Gateway -> OPA                               |
 | `AZTDP_RISK_ENGINE_URL`    | `http://risk-engine:8080`                     | App -> risk engine                           |
