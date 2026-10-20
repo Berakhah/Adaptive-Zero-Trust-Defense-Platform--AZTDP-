@@ -399,7 +399,10 @@ services:
       - grafana
       - dashboard
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/"]
+      # 127.0.0.1, not localhost: nginx:alpine resolves localhost to ::1 and nginx
+      # listens on IPv4 only. Port 80 only redirects to https (self-signed cert), so
+      # assert on the 301 itself rather than following it.
+      test: ["CMD-SHELL", "wget -S --spider --tries=1 http://127.0.0.1:80/ 2>&1 | grep -q 'HTTP/1.1 301'"]
       interval: 10s
       timeout: 5s
       retries: 5
