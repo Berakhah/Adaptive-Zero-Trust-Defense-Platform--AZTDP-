@@ -41,6 +41,34 @@ tests:
             exp_annotations:
               summary: "Sustained denial spike - check dependencies"
 
+  - name: AnomalyScoringDegraded fires when a fifth of calls time out
+    interval: 30s
+    input_series:
+      - series: 'aztdp_anomaly_calls_total{outcome="ok"}'
+        values: '0+80x30'
+      - series: 'aztdp_anomaly_calls_total{outcome="timeout"}'
+        values: '0+20x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AnomalyScoringDegraded
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "Over 5% of requests scored without the ML anomaly signal"
+              description: "The anomaly service is timing out or failing; the risk-engine is failing open and scoring without it. Fallback share: 20%."
+
+  - name: AnomalyScoringDegraded stays quiet when the service is healthy or disabled
+    interval: 30s
+    input_series:
+      - series: 'aztdp_anomaly_calls_total{outcome="ok"}'
+        values: '0+100x30'
+      - series: 'aztdp_anomaly_calls_total{outcome="disabled"}'
+        values: '0+500x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AnomalyScoringDegraded
+        exp_alerts: []
+
   - name: FailClosedDenialSpike stays quiet at a low deny rate
     interval: 30s
     input_series:

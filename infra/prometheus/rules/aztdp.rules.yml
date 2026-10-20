@@ -113,6 +113,20 @@ groups:
           summary: "Service {{ $labels.job }} error rate > 5%"
           description: "Service {{ $labels.job }} is returning 5xx errors at {{ $value | humanizePercentage }} of requests."
 
+      # The risk-engine fails open when the anomaly service errors or times out:
+      # requests are still scored, but without the ML signal. Invisible in the
+      # error rate, so alert on the share of calls that fell back.
+      - alert: AnomalyScoringDegraded
+        expr: |
+          sum(rate(aztdp_anomaly_calls_total{outcome!~"ok|disabled"}[5m]))
+            / sum(rate(aztdp_anomaly_calls_total{outcome!="disabled"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Over 5% of requests scored without the ML anomaly signal"
+          description: "The anomaly service is timing out or failing; the risk-engine is failing open and scoring without it. Fallback share: {{ $value | humanizePercentage }}."
+
   - name: aztdp.audit
     interval: 30s
     rules:

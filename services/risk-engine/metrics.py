@@ -32,6 +32,13 @@ EVAL_LATENCY = Histogram(
     buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5),
 )
 
+ANOMALY_CALLS = Counter(
+    "aztdp_anomaly_calls_total",
+    "Anomaly-service calls by outcome; anything but ok/disabled means the request "
+    "was scored without the ML signal",
+    labelnames=("outcome",),
+)
+
 TELEMETRY_DROPPED = Counter(
     "aztdp_telemetry_dropped_total",
     "Audit telemetry events dropped after retries were exhausted",

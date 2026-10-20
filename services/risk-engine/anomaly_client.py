@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 import requests
 
 from . import config
+from .metrics import ANOMALY_CALLS
 
 logger = logging.getLogger("aztdp.risk.anomaly_client")
 
@@ -14,8 +15,13 @@ _internal_token = os.getenv("AZTDP_INTERNAL_TOKEN", "")
 
 
 def score(payload: Dict[str, Any], last_seen: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Call the anomaly service. Returns None on any error (fail-open)."""
+    """Call the anomaly service. Returns None on any error (fail-open).
+
+    Every outcome is counted in aztdp_anomaly_calls_total so that a request scored
+    without the ML signal is visible, not silent.
+    """
     if not config.ANOMALY_URL:
+        ANOMALY_CALLS.labels(outcome="disabled").inc()
         return None
 
     body = _build_request(payload, last_seen)
@@ -28,10 +34,28 @@ def score(payload: Dict[str, Any], last_seen: Optional[Dict[str, Any]]) -> Optio
             timeout=ANOMALY_TIMEOUT,
         )
         if resp.status_code != 200:
+            ANOMALY_CALLS.labels(outcome="http_error").inc()
+            logger.warning("anomaly service returned %s; scoring without ML signal", resp.status_code)
             return None
-        return resp.json()
-    except Exception:
+        result = resp.json()
+    except requests.exceptions.Timeout:
+        ANOMALY_CALLS.labels(outcome="timeout").inc()
+        logger.warning("anomaly service timed out after %.2fs; scoring without ML signal", ANOMALY_TIMEOUT)
         return None
+    except ValueError:  # before RequestException: requests' JSONDecodeError is both
+        ANOMALY_CALLS.labels(outcome="invalid_response").inc()
+        logger.warning("anomaly service returned invalid JSON; scoring without ML signal")
+        return None
+    except requests.exceptions.RequestException:
+        ANOMALY_CALLS.labels(outcome="connection_error").inc()
+        logger.warning("anomaly service unreachable; scoring without ML signal", exc_info=True)
+        return None
+    except Exception:
+        ANOMALY_CALLS.labels(outcome="error").inc()
+        logger.exception("unexpected anomaly client error; scoring without ML signal")
+        return None
+    ANOMALY_CALLS.labels(outcome="ok").inc()
+    return result
 
 
 def _build_request(payload: Dict[str, Any], last_seen: Optional[Dict[str, Any]]) -> Dict[str, Any]:
