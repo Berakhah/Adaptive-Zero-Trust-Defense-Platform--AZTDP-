@@ -5,7 +5,7 @@ from fastapi import Depends, FastAPI, HTTPException, Response
 
 from .json_logging import configure as _configure_logging
 _configure_logging("risk-engine")
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST
 from pydantic import BaseModel
 
 from . import config, metrics
@@ -45,7 +45,7 @@ def health() -> Dict[str, str]:
 
 @app.get("/metrics")
 def prom_metrics() -> Response:
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    return Response(metrics.render_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.post("/v1/risk/evaluate", dependencies=[Depends(require_internal_token)])

@@ -3,9 +3,14 @@ networks:
     driver: bridge
     # Pinned so nginx (the only trusted proxy) has a stable address. Django and
     # Spring trust client-IP/geo headers only from that single address.
+    #
+    # ip_range confines dynamically assigned container addresses to 172.28.64.0/18,
+    # so nothing can claim 172.28.0.10 before nginx starts (measured: without it, with
+    # nginx last in the start order, another service took .10 and nginx failed to start).
     ipam:
       config:
         - subnet: 172.28.0.0/16
+          ip_range: 172.28.64.0/18
 
 volumes:
   postgres_data:
@@ -34,6 +39,10 @@ services:
 
   postgres:
     image: postgres:16-alpine
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 300
+    restart: unless-stopped
     environment:
       POSTGRES_DB: aztdp
       # Bootstrap superuser: used only by db-migrate and break-glass admin. No
@@ -56,6 +65,9 @@ services:
   # Every service that touches Postgres waits for it to exit 0.
   db-migrate:
     image: postgres:16-alpine
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 100
     entrypoint: ["sh", "/aztdp/scripts/db/migrate.sh"]
     user: postgres
     read_only: true
@@ -87,6 +99,9 @@ services:
   # Postgres). No published ports. Verified by scripts/backup/pg_restore_test.sh.
   pg-backup:
     build: ./infra/pg-backup
+    mem_limit: 256m
+    cpus: 0.25
+    pids_limit: 100
     # Bootstrap superuser: pg_dumpall needs it to read role password hashes.
     environment:
       PGHOST: postgres
@@ -111,6 +126,10 @@ services:
 
   redis:
     image: redis:7.2-alpine
+    mem_limit: 320m
+    cpus: 0.5
+    pids_limit: 100
+    restart: unless-stopped
     command: ["sh", "-c", "redis-server /usr/local/etc/redis/redis.conf --requirepass \"$$REDIS_PASSWORD\""]
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required (see .env.example)}
@@ -127,6 +146,10 @@ services:
 
   keycloak:
     build: ./infra/keycloak
+    mem_limit: 1g
+    cpus: 1.5
+    pids_limit: 500
+    restart: unless-stopped
     environment:
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD is required (see .env.example)}
@@ -163,6 +186,10 @@ services:
 
   opa:
     image: openpolicyagent/opa:0.65.0
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 100
+    restart: unless-stopped
     command: ["run", "--server", "--addr", "0.0.0.0:8181", "/policies"]
     volumes:
       - ./policies:/policies:ro
@@ -178,10 +205,20 @@ services:
 
   gateway:
     build: ./services/gateway
+    mem_limit: 384m
+    cpus: 1.0
+    pids_limit: 200
+    stop_grace_period: 15s
+    restart: unless-stopped
     read_only: true
     tmpfs:
       - /tmp
     environment:
+      # uvicorn reads UVICORN_WORKERS natively (exec-form CMD in the image is
+      # untouched). Redis/Postgres hold all shared state; /metrics is aggregated
+      # across workers via prometheus_client multiprocess mode (tmpfs dir).
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prom
       AZTDP_OPA_URL: http://opa:8181
       AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED:?REDIS_PASSWORD_URLENCODED is required (URL-encoded REDIS_PASSWORD)}@redis:6379/0
       AZTDP_TELEMETRY_URL: http://telemetry-ingest:8080
@@ -207,10 +244,20 @@ services:
 
   risk-engine:
     build: ./services/risk-engine
+    mem_limit: 384m
+    cpus: 1.0
+    pids_limit: 200
+    stop_grace_period: 15s
+    restart: unless-stopped
     read_only: true
     tmpfs:
       - /tmp
     environment:
+      # uvicorn reads UVICORN_WORKERS natively (exec-form CMD in the image is
+      # untouched). Redis/Postgres hold all shared state; /metrics is aggregated
+      # across workers via prometheus_client multiprocess mode (tmpfs dir).
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prom
       AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED:?REDIS_PASSWORD_URLENCODED is required (URL-encoded REDIS_PASSWORD)}@redis:6379/0
       AZTDP_ANOMALY_URL: http://anomaly-service:8080
       AZTDP_TELEMETRY_URL: http://telemetry-ingest:8080
@@ -228,7 +275,16 @@ services:
 
   anomaly-service:
     build: ./services/anomaly-service
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 200
+    stop_grace_period: 15s
+    restart: unless-stopped
     environment:
+      # MUST stay a single worker: the model lives in-process and the training
+      # scheduler runs in-process, so N workers would each hold a divergent model
+      # and run N schedulers. Pinned here so a host UVICORN_WORKERS cannot change it.
+      UVICORN_WORKERS: "1"
       AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED:?REDIS_PASSWORD_URLENCODED is required (URL-encoded REDIS_PASSWORD)}@redis:6379/0
       # Password via libpq's PGPASSWORD, so it never needs URL-encoding.
       AZTDP_DB_URL: postgresql://aztdp_anomaly@postgres:5432/aztdp
@@ -253,10 +309,20 @@ services:
 
   telemetry-ingest:
     build: ./services/telemetry-ingest
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 200
+    stop_grace_period: 15s
+    restart: unless-stopped
     read_only: true
     tmpfs:
       - /tmp
     environment:
+      # uvicorn reads UVICORN_WORKERS natively (exec-form CMD in the image is
+      # untouched). Redis/Postgres hold all shared state; /metrics is aggregated
+      # across workers via prometheus_client multiprocess mode (tmpfs dir).
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prom
       # Password via libpq's PGPASSWORD, so it never needs URL-encoding.
       AZTDP_DB_URL: postgresql://aztdp_ingest@postgres:5432/aztdp
       PGPASSWORD: ${PG_INGEST_PASSWORD:?PG_INGEST_PASSWORD is required (see .env.example)}
@@ -274,10 +340,19 @@ services:
 
   forensics:
     build: ./services/forensics
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 200
+    restart: unless-stopped
     read_only: true
     tmpfs:
       - /tmp
     environment:
+      # uvicorn reads UVICORN_WORKERS natively (exec-form CMD in the image is
+      # untouched). Redis/Postgres hold all shared state; /metrics is aggregated
+      # across workers via prometheus_client multiprocess mode (tmpfs dir).
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prom
       # Password via libpq's PGPASSWORD, so it never needs URL-encoding.
       AZTDP_DB_URL: postgresql://aztdp_forensics@postgres:5432/aztdp
       PGPASSWORD: ${PG_FORENSICS_PASSWORD:?PG_FORENSICS_PASSWORD is required (see .env.example)}
@@ -297,6 +372,10 @@ services:
 
   django-app:
     build: ./services/django-app
+    mem_limit: 512m
+    cpus: 1.5
+    pids_limit: 200
+    restart: unless-stopped
     read_only: true
     tmpfs:
       - /tmp
@@ -346,6 +425,9 @@ services:
   # One-shot Django schema migration (its own database, created by db-migrate).
   django-migrate:
     build: ./services/django-app
+    mem_limit: 384m
+    cpus: 0.5
+    pids_limit: 100
     environment: *django-env
     command: ["python", "manage.py", "migrate", "--noinput"]
     restart: "no"
@@ -359,6 +441,10 @@ services:
 
   spring-app:
     build: ./services/spring-app
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 500
+    restart: unless-stopped
     environment:
       AZTDP_RISK_ENGINE_URL: http://risk-engine:8080
       AZTDP_POLICY_GATEWAY_URL: http://gateway:8080
@@ -381,6 +467,10 @@ services:
 
   nginx:
     image: nginx:1.27-alpine
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 100
+    restart: unless-stopped
     volumes:
       - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./infra/nginx/certs:/etc/nginx/certs:ro
@@ -411,6 +501,10 @@ services:
 
   prometheus:
     image: prom/prometheus:v2.53.0
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 100
+    restart: unless-stopped
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -457,6 +551,10 @@ services:
 
   grafana:
     image: grafana/grafana:11.1.0
+    mem_limit: 384m
+    cpus: 0.5
+    pids_limit: 100
+    restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required (see .env.example)}
@@ -475,6 +573,10 @@ services:
 
   dashboard:
     build: ./services/dashboard
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 50
+    restart: unless-stopped
     environment:
       AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
       # Full htpasswd line (user:hash), e.g. `echo "soc:$(openssl passwd -apr1)"`.
