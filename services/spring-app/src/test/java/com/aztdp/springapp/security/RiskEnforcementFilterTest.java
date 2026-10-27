@@ -60,6 +60,19 @@ class RiskEnforcementFilterTest {
     }
 
     @Test
+    void bypassMatchesExactPathsAndActuatorSubtreeOnly() {
+        for (String ok : new String[] {"/health", "/health/", "/metrics", "/actuator", "/actuator/prometheus"}) {
+            MockHttpServletRequest req = new MockHttpServletRequest("GET", ok);
+            assertThat(filter.shouldNotFilter(req)).as(ok).isTrue();
+        }
+        for (String enforced : new String[] {
+                "/healthz", "/health/x", "/metricsfoo", "/metrics/extra", "/actuatorx", "/v1/payments/1"}) {
+            MockHttpServletRequest req = new MockHttpServletRequest("GET", enforced);
+            assertThat(filter.shouldNotFilter(req)).as(enforced).isFalse();
+        }
+    }
+
+    @Test
     void replayDetectedReturns403EvenWhenFailOpen() throws Exception {
         properties.setFailOpen(true);
         MockHttpServletRequest req = authenticatedRequest("/v1/payments/1");

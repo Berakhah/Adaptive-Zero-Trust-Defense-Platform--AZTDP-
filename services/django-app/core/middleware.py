@@ -8,8 +8,8 @@ from django.http import JsonResponse
 from .client_ip import parse_cidrs, resolve_client_ip, resolve_geo
 from .jwt import JwtVerificationError, JwtVerifier
 from .policy_client import PolicyClient, PolicyClientError
+from .revocation_client import RevocationClientError, TokenRevocationClient
 from .risk_client import RiskClient, RiskClientError
-from .revocation_client import TokenRevocationClient, RevocationClientError
 
 
 class RiskAuthzMiddleware:
@@ -195,10 +195,10 @@ class RiskAuthzMiddleware:
         return 2
 
     def _is_allowlisted(self, path: str) -> bool:
-        for allowed in settings.AZTDP_ALLOWLIST_PATHS:
-            if path.startswith(allowed):
-                return True
-        return False
+        # Exact match (one trailing slash tolerated), never a prefix match: a prefix
+        # would let /healthz or /health/anything skip authentication.
+        normalized = path.rstrip("/") or "/"
+        return normalized in settings.AZTDP_ALLOWLIST_PATHS
 
     def _unauthorized(self, code: str):
         return JsonResponse({"error": {"code": code}}, status=401)

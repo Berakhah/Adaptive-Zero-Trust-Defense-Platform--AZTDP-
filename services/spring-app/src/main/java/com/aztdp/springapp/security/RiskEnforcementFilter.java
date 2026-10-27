@@ -56,8 +56,19 @@ public class RiskEnforcementFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String path = request.getRequestURI();
-        return path.startsWith("/health") || path.startsWith("/metrics") || path.startsWith("/actuator");
+        return isBypassPath(request.getRequestURI());
+    }
+
+    // Exact paths (one trailing slash tolerated) plus the /actuator subtree. A bare
+    // startsWith would also exempt /healthz or /metricsfoo from risk enforcement.
+    static boolean isBypassPath(String path) {
+        String normalized = path.length() > 1 && path.endsWith("/")
+                ? path.substring(0, path.length() - 1)
+                : path;
+        return normalized.equals("/health")
+                || normalized.equals("/metrics")
+                || normalized.equals("/actuator")
+                || normalized.startsWith("/actuator/");
     }
 
     @Override

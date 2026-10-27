@@ -1,13 +1,10 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-
+from core.middleware import RiskAuthzMiddleware
+from core.risk_client import RiskClientError
 from django.http import HttpResponse
 from django.test import RequestFactory
-
-from core.middleware import RiskAuthzMiddleware
-from core.risk_client import RiskClient, RiskClientError
-from core.policy_client import PolicyClient
 
 
 def _ok_view(request):
@@ -45,6 +42,22 @@ def test_allowlist_passes_through(rf):
     mw = _build_middleware()
     response = mw(rf.get("/health"))
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize("path", ["/health/", "/metrics", "/v1/auth/step-up/verify"])
+def test_allowlist_matches_exact_paths(rf, path):
+    mw = _build_middleware()
+    assert mw(rf.get(path)).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/healthz", "/health/x", "/healthcheck-admin", "/metrics/extra", "/metricsfoo", "/health/../v1/admin/flags"],
+)
+def test_allowlist_does_not_match_path_prefixes(rf, path):
+    """A path that merely starts with an allowlisted one must still require a token."""
+    mw = _build_middleware()
+    assert mw(rf.get(path)).status_code == 401
 
 
 def test_missing_token_returns_401(rf):
