@@ -184,3 +184,23 @@ def test_revocation_client_maps_network_error_to_unavailable():
     with pytest.raises(RevocationClientError) as excinfo:
         client.revoke({"token_jti_hash": "h", "reason": "policy", "source": "policy"})
     assert excinfo.value.code == "revocation_unavailable"
+
+
+@pytest.mark.parametrize("path", ["/ui", "/ui/", "/ui/app.js", "/ui/static/css/site.css"])
+def test_debug_ui_subtree_is_allowlisted(rf, settings, path):
+    settings.AZTDP_ALLOWLIST_PATHS = ["/health", "/ui"]
+    settings.AZTDP_ALLOWLIST_SUBTREES = ["/ui"]
+    assert _build_middleware()(rf.get(path)).status_code == 200
+
+
+@pytest.mark.parametrize("path", ["/uix", "/ui-admin/x", "/ui/../v1/admin/flags", "/ui/./x"])
+def test_debug_ui_subtree_respects_segment_boundary(rf, settings, path):
+    settings.AZTDP_ALLOWLIST_PATHS = ["/health", "/ui"]
+    settings.AZTDP_ALLOWLIST_SUBTREES = ["/ui"]
+    assert _build_middleware()(rf.get(path)).status_code == 401
+
+
+def test_ui_subtree_not_allowlisted_without_setting(rf, settings):
+    settings.AZTDP_ALLOWLIST_PATHS = ["/health"]
+    settings.AZTDP_ALLOWLIST_SUBTREES = []
+    assert _build_middleware()(rf.get("/ui/app.js")).status_code == 401

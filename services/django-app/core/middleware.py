@@ -195,10 +195,19 @@ class RiskAuthzMiddleware:
         return 2
 
     def _is_allowlisted(self, path: str) -> bool:
-        # Exact match (one trailing slash tolerated), never a prefix match: a prefix
-        # would let /healthz or /health/anything skip authentication.
+        # Exact match (one trailing slash tolerated), never a bare prefix match: a
+        # prefix would let /healthz or /health/anything skip authentication. Only
+        # entries in AZTDP_ALLOWLIST_SUBTREES match their children, and only on a
+        # segment boundary with no "." / ".." segments.
         normalized = path.rstrip("/") or "/"
-        return normalized in settings.AZTDP_ALLOWLIST_PATHS
+        if normalized in settings.AZTDP_ALLOWLIST_PATHS:
+            return True
+        if any(seg in (".", "..") for seg in path.split("/")):
+            return False
+        return any(
+            normalized.startswith(root + "/")
+            for root in getattr(settings, "AZTDP_ALLOWLIST_SUBTREES", [])
+        )
 
     def _unauthorized(self, code: str):
         return JsonResponse({"error": {"code": code}}, status=401)

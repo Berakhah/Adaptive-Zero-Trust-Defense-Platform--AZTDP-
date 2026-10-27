@@ -26,6 +26,7 @@ _TOTP_STEP = 30
 _TOTP_DIGITS = 6
 _KEY_PREFIX = "stepup:chal:"
 _USER_KEY_PREFIX = "stepup:user:"
+_USED_KEY_PREFIX = "stepup:used:"
 MAX_USER_FAILURES = 15      # wrong codes per user across all challenges
 _USER_WINDOW = 900          # seconds
 
@@ -128,7 +129,9 @@ def verify_challenge(challenge_id: str, totp_code: str, user_id: str) -> Optiona
     if r.hincrby(key, "attempts", 1) > MAX_ATTEMPTS:
         r.delete(key)
         return None
-    if not _verify_totp(totp_code, _user_secret(user_id)):
+    counter = _match_totp(totp_code, _user_secret(user_id))
+    if counter is None or not _consume_totp_counter(r, user_id, counter):
+        # Wrong code, or a correct code that was already accepted (RFC 6238 5.2).
         bump_counter(r, _USER_KEY_PREFIX + user_id, _USER_WINDOW)
         return None
     if r.delete(key) != 1:  # one-shot, even under concurrent correct submissions
@@ -138,17 +141,27 @@ def verify_challenge(challenge_id: str, totp_code: str, user_id: str) -> Optiona
 
 # ── TOTP implementation (RFC 6238 / RFC 4226) ────────────────────────────────
 
-def _verify_totp(code: str, secret: bytes, window: int = 1) -> bool:
-    """Verify a TOTP code within ±window time steps."""
+def _match_totp(code: str, secret: bytes, window: int = 1) -> Optional[int]:
+    """Return the time-step counter a TOTP code matches within ±window, else None."""
     if not code or not code.isdigit() or len(code) != _TOTP_DIGITS:
-        return False
+        return None
     now = int(time.time())
     for offset in range(-window, window + 1):
         counter = (now // _TOTP_STEP) + offset
         expected = _hotp(secret, counter)
         if hmac.compare_digest(code, expected):
-            return True
-    return False
+            return counter
+    return None
+
+
+def _consume_totp_counter(r, user_id: str, counter: int) -> bool:
+    """Record an accepted (user, counter) pair; False if it was already used.
+
+    SET NX is atomic, so concurrent submissions of one code cannot both win. The
+    TTL covers the whole ±1 step acceptance window (3 steps) plus a margin.
+    """
+    key = f"{_USED_KEY_PREFIX}{user_id}:{counter}"
+    return bool(r.set(key, "1", nx=True, ex=_TOTP_STEP * 4))
 
 
 def _hotp(secret: bytes, counter: int) -> str:

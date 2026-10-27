@@ -92,9 +92,12 @@ AZTDP_ENDPOINT_SENSITIVITY = [
 ]
 
 AZTDP_ALLOWLIST_PATHS = ["/health", "/metrics", "/v1/auth/step-up/verify"]
+# Subtrees allowed on a path-segment boundary: "/ui" and "/ui/<anything>", never "/uix".
+AZTDP_ALLOWLIST_SUBTREES = []
 if DEBUG:
-    # The demo UI is served only in development.
+    # The demo UI (page and its assets) is served only in development.
     AZTDP_ALLOWLIST_PATHS.append("/ui")
+    AZTDP_ALLOWLIST_SUBTREES.append("/ui")
 
 # Trusted reverse-proxy CIDRs. Only requests originating from these networks
 # are allowed to set X-Client-Ip / X-Forwarded-For / X-Geo. Empty by default

@@ -147,3 +147,31 @@ def test_spoofed_headers_ignored_when_not_from_trusted_proxy(rf):
         step_up_verify(req)
     assert stepup.get_store().get("stepup:ip:203.0.113.50") == "3"
     assert not list(stepup.get_store().scan_iter("stepup:ip:10.*"))
+
+
+# ── TOTP replay (RFC 6238 5.2) ───────────────────────────────────────────────
+
+def test_totp_code_cannot_be_replayed_on_another_challenge():
+    stepup.create_challenge("r1", "u1")
+    stepup.create_challenge("r2", "u1")
+    code = stepup.current_totp_for_tests("u1")
+    assert stepup.verify_challenge("r1", code, "u1")
+    assert stepup.verify_challenge("r2", code, "u1") is None
+
+
+def test_totp_replay_counts_toward_user_lockout():
+    code = stepup.current_totp_for_tests("u1")
+    stepup.create_challenge("r3", "u1")
+    assert stepup.verify_challenge("r3", code, "u1")
+    for i in range(stepup.MAX_USER_FAILURES):
+        stepup.create_challenge(f"rp{i}", "u1")
+        assert stepup.verify_challenge(f"rp{i}", code, "u1") is None
+    stepup.create_challenge("rp-final", "u1")
+    assert stepup.verify_challenge("rp-final", stepup.current_totp_for_tests("u1"), "u1") is None
+
+
+def test_totp_replay_is_per_user():
+    stepup.create_challenge("r4", "u1")
+    stepup.create_challenge("r5", "u2")
+    assert stepup.verify_challenge("r4", stepup.current_totp_for_tests("u1"), "u1")
+    assert stepup.verify_challenge("r5", stepup.current_totp_for_tests("u2"), "u2")
