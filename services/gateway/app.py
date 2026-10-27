@@ -7,7 +7,7 @@ from .json_logging import configure as _configure_logging
 
 _configure_logging("gateway")
 from prometheus_client import CONTENT_TYPE_LATEST
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import config, metrics
 from .internal_auth import require_internal_token
@@ -41,7 +41,8 @@ class RevokeRequest(BaseModel):
     # Mirrors the CHECK constraint on token_revocations.source.
     source: Literal["policy", "admin", "session_end", "manual"]
     # The access token's `exp` (epoch seconds); bounds the cache TTL.
-    expires_at: Optional[int] = None
+    # Bounded so the later datetime conversion cannot overflow after the revocation is stored.
+    expires_at: Optional[int] = Field(default=None, ge=0, le=4_102_444_800)  # <= year 2100
 
 
 @app.get("/health")

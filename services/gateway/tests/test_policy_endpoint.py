@@ -55,3 +55,22 @@ def test_revoke_endpoint(auth_headers):
 def test_protected_route_rejects_missing_token():
     r = client.post("/v1/policy/decision", json={"input": {}})
     assert r.status_code == 401
+
+
+import pytest as _pytest
+from pydantic import ValidationError as _ValidationError
+
+
+@_pytest.mark.parametrize("bad", [-1, 99_999_999_999_999, 4_102_444_801])
+def test_revoke_request_rejects_out_of_range_expires_at(bad):
+    from gateway.app import RevokeRequest
+
+    with _pytest.raises(_ValidationError):
+        RevokeRequest(token_jti_hash="h", reason="r", source="admin", expires_at=bad)
+
+
+def test_revoke_request_accepts_normal_and_missing_expires_at():
+    from gateway.app import RevokeRequest
+
+    assert RevokeRequest(token_jti_hash="h", reason="r", source="admin", expires_at=1_900_000_000)
+    assert RevokeRequest(token_jti_hash="h", reason="r", source="admin").expires_at is None
