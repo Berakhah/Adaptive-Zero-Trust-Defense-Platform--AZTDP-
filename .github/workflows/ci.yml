@@ -172,7 +172,7 @@ jobs:
             if curl -sf http://localhost:8000/health \
                && curl -sf http://localhost:8001/health \
                && curl -sf http://localhost:8002/health \
-               && curl -sf http://localhost:8080/health/ready; then
+               && curl -sf http://localhost:9000/health/ready; then
               echo "stack ready"
               exit 0
             fi
