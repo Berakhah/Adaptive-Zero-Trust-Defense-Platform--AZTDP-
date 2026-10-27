@@ -51,6 +51,11 @@ services:
   django-app:
     environment:
       AZTDP_DEBUG: "true"
+      # Dev only: the published port below bypasses nginx, so a client on the host
+      # reaches Django from the bridge gateway. Trust the whole bridge subnet so
+      # X-Client-Ip / X-Geo from the attack simulator and live tests are honoured
+      # (the production file trusts only nginx, 172.28.0.10/32).
+      AZTDP_TRUSTED_PROXIES: 172.28.0.0/16
     ports:
       - "127.0.0.1:8010:8000"
   django-migrate:
