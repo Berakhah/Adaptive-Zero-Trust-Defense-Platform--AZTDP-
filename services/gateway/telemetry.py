@@ -46,10 +46,13 @@ def _post(event_type: str, payload: Dict[str, Any]) -> None:
             if status < 400:
                 return
             last_error = f"http {status}"
+            if status < 500:
+                # Permanent client error (bad token, malformed payload): retrying can't help.
+                break
         except Exception as exc:
             last_error = str(exc)
     metrics.TELEMETRY_DROPPED.labels(service="gateway", reason="exhausted").inc()
     logger.warning(
-        "audit telemetry dropped after %d attempts: event_type=%s request_id=%s error=%s",
-        len(_BACKOFF_SECONDS) + 1, event_type, payload.get("request_id"), last_error,
+        "audit telemetry dropped after %d attempt(s): event_type=%s request_id=%s error=%s",
+        attempt + 1, event_type, payload.get("request_id"), last_error,
     )

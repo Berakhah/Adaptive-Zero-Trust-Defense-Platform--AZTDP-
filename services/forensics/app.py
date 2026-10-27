@@ -8,7 +8,7 @@ from prometheus_client import CONTENT_TYPE_LATEST
 
 from . import config, metrics
 from .db import close_pool, get_pool
-from .internal_auth import require_internal_token
+from .internal_auth import _expected_token, require_internal_token
 from .json_logging import configure as _configure_logging
 
 _configure_logging("forensics")
@@ -21,6 +21,7 @@ _auth = [Depends(require_internal_token)]
 
 @app.on_event("startup")
 def _on_startup() -> None:
+    _expected_token()  # refuse to start with open internal endpoints
     try:
         get_pool().open()
     except Exception as exc:

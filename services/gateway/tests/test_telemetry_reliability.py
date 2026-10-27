@@ -64,3 +64,23 @@ def test_http_error_status_is_retried(monkeypatch):
     monkeypatch.setattr(telemetry.config, "TELEMETRY_URL", "http://t")
     telemetry._post("policy_decision", {"request_id": "r"})
     assert calls["n"] == 4
+
+
+def test_permanent_client_error_is_not_retried(monkeypatch):
+    class _Unauthorized:
+        status_code = 401
+
+    calls = {"n": 0}
+
+    def post(*a, **k):
+        calls["n"] += 1
+        return _Unauthorized()
+
+    sleeps = []
+    monkeypatch.setattr(telemetry.requests, "post", post)
+    monkeypatch.setattr(telemetry.time, "sleep", sleeps.append)
+    monkeypatch.setattr(telemetry.config, "TELEMETRY_URL", "http://t")
+    before = metrics.TELEMETRY_DROPPED.labels(service="gateway", reason="exhausted")._value.get()
+    telemetry._post("policy_decision", {"request_id": "r"})
+    assert calls["n"] == 1 and sleeps == []
+    assert metrics.TELEMETRY_DROPPED.labels(service="gateway", reason="exhausted")._value.get() == before + 1

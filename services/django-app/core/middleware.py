@@ -219,7 +219,14 @@ class RiskAuthzMiddleware:
         from .stepup import create_challenge
 
         challenge_id = reason.get("challenge_id", str(uuid.uuid4()))
-        create_challenge(challenge_id, subject_id, token_jti_hash)
+        try:
+            create_challenge(challenge_id, subject_id, token_jti_hash)
+        except Exception:
+            # Fail closed: without a stored challenge the user could never complete step-up.
+            import logging
+
+            logging.getLogger("aztdp.middleware").exception("step-up challenge store unavailable")
+            return JsonResponse({"error": {"code": "stepup_unavailable"}}, status=503)
         return JsonResponse(
             {
                 "error": {

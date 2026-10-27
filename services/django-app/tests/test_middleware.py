@@ -204,3 +204,11 @@ def test_ui_subtree_not_allowlisted_without_setting(rf, settings):
     settings.AZTDP_ALLOWLIST_PATHS = ["/health"]
     settings.AZTDP_ALLOWLIST_SUBTREES = []
     assert _build_middleware()(rf.get("/ui/app.js")).status_code == 401
+
+
+def test_stepup_store_outage_returns_503(rf):
+    mw = _build_middleware()
+    with patch("core.stepup.create_challenge", side_effect=ConnectionError("redis down")):
+        response = mw._stepup({}, "user-1", "hash")
+    assert response.status_code == 503
+    assert b"stepup_unavailable" in response.content
