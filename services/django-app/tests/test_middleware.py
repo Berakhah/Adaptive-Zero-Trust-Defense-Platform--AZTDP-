@@ -1,13 +1,10 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-
+from core.middleware import RiskAuthzMiddleware
+from core.risk_client import RiskClientError
 from django.http import HttpResponse
 from django.test import RequestFactory
-
-from core.middleware import RiskAuthzMiddleware
-from core.risk_client import RiskClient, RiskClientError
-from core.policy_client import PolicyClient
 
 
 def _ok_view(request):
@@ -45,6 +42,22 @@ def test_allowlist_passes_through(rf):
     mw = _build_middleware()
     response = mw(rf.get("/health"))
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize("path", ["/health/", "/metrics", "/v1/auth/step-up/verify"])
+def test_allowlist_matches_exact_paths(rf, path):
+    mw = _build_middleware()
+    assert mw(rf.get(path)).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/healthz", "/health/x", "/healthcheck-admin", "/metrics/extra", "/metricsfoo", "/health/../v1/admin/flags"],
+)
+def test_allowlist_does_not_match_path_prefixes(rf, path):
+    """A path that merely starts with an allowlisted one must still require a token."""
+    mw = _build_middleware()
+    assert mw(rf.get(path)).status_code == 401
 
 
 def test_missing_token_returns_401(rf):
@@ -100,3 +113,102 @@ def test_stepup_returns_401_with_challenge(rf):
     assert response.status_code == 401
     body = response.content.decode()
     assert "STEP_UP_REQUIRED" in body
+
+
+# --- Task 9: durable revocation -------------------------------------------
+
+def _revoke_decision(mw, exp=1_760_000_000):
+    mw.verifier.verify = MagicMock(
+        return_value={
+            "sub": "user-1",
+            "jti": "jti-abc",
+            "session_state": "sess",
+            "roles": ["user"],
+            "exp": exp,
+        }
+    )
+    mw.risk_client.evaluate = MagicMock(
+        return_value={"risk_score": 0.99, "trust_score": 0.01, "anomaly_score": 0.0}
+    )
+    mw.policy_client.decide = MagicMock(
+        return_value={"decision": {"decision": "revoke", "reason": {"rule": "very_high_risk"}}}
+    )
+
+
+def test_revoke_sends_token_exp_as_expires_at(rf):
+    mw = _build_middleware()
+    _revoke_decision(mw, exp=1_760_000_123)
+    mw.revocation_client.revoke = MagicMock(return_value={"status": "revoked"})
+    response = mw(_request(rf))
+    assert response.status_code == 403
+    payload = mw.revocation_client.revoke.call_args.args[0]
+    assert payload["expires_at"] == 1_760_000_123
+    assert payload["source"] == "policy"
+
+
+def test_revoke_not_persisted_still_denies_and_logs_error(rf, caplog):
+    from core.revocation_client import RevocationClientError
+
+    mw = _build_middleware()
+    _revoke_decision(mw)
+    mw.revocation_client.revoke = MagicMock(
+        side_effect=RevocationClientError("revocation_not_persisted")
+    )
+    with caplog.at_level("ERROR", logger="aztdp.middleware"):
+        response = mw(_request(rf))
+    assert response.status_code == 403
+    assert b"token_revoked" in response.content
+    assert any(
+        r.levelname == "ERROR" and "revocation_not_persisted" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_revocation_client_maps_503_to_not_persisted():
+    from core.revocation_client import RevocationClientError, TokenRevocationClient
+
+    client = TokenRevocationClient("http://gw/v1/tokens/revoke", 0.1, 0.1, internal_token="t")
+    resp = MagicMock(status_code=503)
+    client.session.post = MagicMock(return_value=resp)
+    with pytest.raises(RevocationClientError) as excinfo:
+        client.revoke({"token_jti_hash": "h", "reason": "policy", "source": "policy"})
+    assert excinfo.value.code == "revocation_not_persisted"
+
+
+def test_revocation_client_maps_network_error_to_unavailable():
+    import requests
+    from core.revocation_client import RevocationClientError, TokenRevocationClient
+
+    client = TokenRevocationClient("http://gw/v1/tokens/revoke", 0.1, 0.1)
+    client.session.post = MagicMock(side_effect=requests.ConnectionError("down"))
+    with pytest.raises(RevocationClientError) as excinfo:
+        client.revoke({"token_jti_hash": "h", "reason": "policy", "source": "policy"})
+    assert excinfo.value.code == "revocation_unavailable"
+
+
+@pytest.mark.parametrize("path", ["/ui", "/ui/", "/ui/app.js", "/ui/static/css/site.css"])
+def test_debug_ui_subtree_is_allowlisted(rf, settings, path):
+    settings.AZTDP_ALLOWLIST_PATHS = ["/health", "/ui"]
+    settings.AZTDP_ALLOWLIST_SUBTREES = ["/ui"]
+    assert _build_middleware()(rf.get(path)).status_code == 200
+
+
+@pytest.mark.parametrize("path", ["/uix", "/ui-admin/x", "/ui/../v1/admin/flags", "/ui/./x"])
+def test_debug_ui_subtree_respects_segment_boundary(rf, settings, path):
+    settings.AZTDP_ALLOWLIST_PATHS = ["/health", "/ui"]
+    settings.AZTDP_ALLOWLIST_SUBTREES = ["/ui"]
+    assert _build_middleware()(rf.get(path)).status_code == 401
+
+
+def test_ui_subtree_not_allowlisted_without_setting(rf, settings):
+    settings.AZTDP_ALLOWLIST_PATHS = ["/health"]
+    settings.AZTDP_ALLOWLIST_SUBTREES = []
+    assert _build_middleware()(rf.get("/ui/app.js")).status_code == 401
+
+
+def test_stepup_store_outage_returns_503(rf):
+    mw = _build_middleware()
+    with patch("core.stepup.create_challenge", side_effect=ConnectionError("redis down")):
+        response = mw._stepup({}, "user-1", "hash")
+    assert response.status_code == 503
+    assert b"stepup_unavailable" in response.content

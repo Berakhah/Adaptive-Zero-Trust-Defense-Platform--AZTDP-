@@ -1,8 +1,13 @@
 """Burst attack: 100 requests in ~10 seconds to spike request_rate_1m."""
 import time
 
-from utils import base_url, default_headers, get_access_token, print_result, request_json
-
+from utils import (
+    base_url,
+    default_headers,
+    get_access_token,
+    print_result,
+    request_json,
+)
 
 REQUEST_COUNT = 100
 WINDOW_SECONDS = 10.0

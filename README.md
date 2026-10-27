@@ -45,8 +45,13 @@ See [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) for t
 ## Quick start
 
 ```bash
-# 1. Bring up the full 13-service stack
-docker compose up -d --build
+# 1. Bring up the dev stack. The base docker-compose.yml is the production
+#    profile: it publishes only the nginx ingress and refuses to start unless
+#    every secret is set (see .env.example). Local development uses the
+#    committed, dev-only values in .env.dev plus docker-compose.dev.yml
+#    (loopback ports, seeded Keycloak users, DEBUG on). Add
+#    `--profile sim` to also start the attack simulator.
+docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 # 2. Wait for Keycloak to import the realm (~60s)
 curl -sf http://localhost:8080/health/ready
@@ -93,7 +98,7 @@ Every service is environment-driven. Key shared variables:
 | Variable                   | Default                                       | Purpose                                      |
 |----------------------------|-----------------------------------------------|----------------------------------------------|
 | `AZTDP_FAIL_OPEN`          | `false`                                       | Per-service. `true` = allow on backend error |
-| `AZTDP_REDIS_URL`          | `redis://redis:6379/0`                        | Risk-engine + gateway shared store           |
+| `AZTDP_REDIS_URL`          | `redis://:<password>@redis:6379/0`            | Shared store; password required (`REDIS_PASSWORD_URLENCODED`) |
 | `AZTDP_DB_URL`             | `postgresql://aztdp:aztdp@postgres:5432/aztdp`| Telemetry, forensics, anomaly                |
 | `AZTDP_OPA_URL`            | `http://opa:8181`                             | Gateway -> OPA                               |
 | `AZTDP_RISK_ENGINE_URL`    | `http://risk-engine:8080`                     | App -> risk engine                           |
@@ -115,7 +120,7 @@ Full list in [docs/architecture/component-ports.md](docs/architecture/component-
 # Unit tests (Python)
 pip install pytest==8.2.2 pytest-django httpx
 for req in services/*/requirements.txt; do pip install -r "$req"; done
-pytest
+bash scripts/run_tests.sh   # one pytest process per service; a bare root `pytest` cannot collect
 
 # Java tests
 cd services/spring-app && mvn test
@@ -147,6 +152,8 @@ helm install aztdp infra/helm/ -n aztdp --create-namespace
 
 ## Documentation map
 
+- [docs/runbooks/QUICK_START_GUIDE.md](docs/runbooks/QUICK_START_GUIDE.md) — Full setup guide (incl. Windows), commands, troubleshooting
+- [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md), [docs/GO_LIVE_CHECKLIST.md](docs/GO_LIVE_CHECKLIST.md), [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md), [docs/PERFORMANCE_BASELINE.md](docs/PERFORMANCE_BASELINE.md), [CHANGELOG.md](CHANGELOG.md) — Status, launch checklist, limitations, measured performance, history
 - [docs/threat-model/](docs/threat-model/) — STRIDE analysis, 8 gaps, attack scenarios
 - [docs/architecture/](docs/architecture/) — Component inventory, sequence diagrams, 7 ADRs
 - [docs/data-model/REDIS_PATTERNS.md](docs/data-model/REDIS_PATTERNS.md) — All 5 Redis key patterns
@@ -155,18 +162,23 @@ helm install aztdp infra/helm/ -n aztdp --create-namespace
 - [docs/runbooks/INCIDENT_RESPONSE.md](docs/runbooks/INCIDENT_RESPONSE.md) — Forensics queries by attack type
 - [docs/SECURITY.md](docs/SECURITY.md) — Vulnerability reporting, known gaps
 - [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — Dev setup, PR checklist
-- [scripts/db/schema.sql](scripts/db/schema.sql) — PostgreSQL schema (6 tables, 22 indexes)
+- [scripts/db/migrations/](scripts/db/migrations/) — PostgreSQL schema as versioned migrations, applied by [scripts/db/migrate.sh](scripts/db/migrate.sh) (compose service `db-migrate`) with per-service roles ([infra/postgres/04_roles.sql](infra/postgres/04_roles.sql), [05_grants.sql](infra/postgres/05_grants.sql))
 
 ---
 
-## Known limitations
+## Status and known limitations
 
-- `X-Client-Ip` and `X-Geo` headers are user-controllable. **In production, only trust them from a verified upstream reverse proxy** (Envoy, nginx with `real_ip_header` pinned to the LB).
-- Replay window is 60 s, not the full token lifetime — an attacker who waits 61 s avoids the replay flag but still triggers IP-drift scoring.
-- Anomaly service fails open: if it's restarting or retraining, requests are not blocked.
-- Single-region only. No multi-region replication for Redis or PostgreSQL.
+**Not production-ready yet:** see [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md) for the honest status and open decisions, [docs/GO_LIVE_CHECKLIST.md](docs/GO_LIVE_CHECKLIST.md) before any real deployment, and [CHANGELOG.md](CHANGELOG.md) for what changed.
 
-See [docs/SECURITY.md](docs/SECURITY.md) and [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) § "Known gaps" for details.
+The ones to know first (full list in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)):
+
+- The anomaly service fails open: if it errors or times out, the request is scored without the ML signal. This is counted (`aztdp_anomaly_calls_total`) and alerted on, but not blocked.
+- Measured performance misses the provisional SLOs; anomaly scoring tops out near 29 req/s ([docs/PERFORMANCE_BASELINE.md](docs/PERFORMANCE_BASELINE.md)).
+- `X-Client-Ip` and `X-Geo` are trusted only from the pinned nginx ingress. Do not publish the app ports.
+- Replay window is 60 s, and an IP change inside it is denied, including for legitimate network switches.
+- Single region, single node; Docker Compose only.
+
+See also [docs/SECURITY.md](docs/SECURITY.md) and [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) § "Known gaps".
 
 ---
 

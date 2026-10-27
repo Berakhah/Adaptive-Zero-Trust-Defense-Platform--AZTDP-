@@ -10,10 +10,15 @@ from pydantic import BaseModel, Field
 from . import config, metrics
 from .feature_engineering import build_feature_vector, record_request
 from .internal_auth import require_internal_token
-from .model import AnomalyModel, start_hot_reload
-from .training import cold_start_train, persist_baseline, retrain_from_baselines, start_retrain_scheduler
-
 from .json_logging import configure as _configure_logging
+from .model import AnomalyModel, is_valid_version, start_hot_reload
+from .training import (
+    cold_start_train,
+    persist_baseline,
+    retrain_from_baselines,
+    start_retrain_scheduler,
+)
+
 _configure_logging("anomaly-service")
 logger = logging.getLogger("aztdp.anomaly")
 
@@ -43,6 +48,7 @@ class AnomalyRequest(BaseModel):
 @app.on_event("startup")
 def _on_startup() -> None:
     global redis_client
+    config.require_hmac_key()  # fail closed: never run without a model-signing key
     if config.REDIS_URL:
         try:
             redis_client = redis.Redis.from_url(config.REDIS_URL, decode_responses=True)
@@ -55,10 +61,12 @@ def _on_startup() -> None:
     if redis_client is not None:
         try:
             stored = redis_client.get(config.MODEL_VERSION_KEY)
-            if stored:
+            if stored and is_valid_version(stored):
                 target_version = stored
+            elif stored:
+                logger.error("invalid model version in redis ignored: %r", stored)
         except Exception:
-            pass
+            logger.warning("could not read model version from redis; using %s", target_version, exc_info=True)
 
     if not model.load(target_version):
         cold_start_train(model, version=target_version)
@@ -66,7 +74,7 @@ def _on_startup() -> None:
             try:
                 redis_client.set(config.MODEL_VERSION_KEY, model.version)
             except Exception:
-                pass
+                logger.warning("could not publish model version to redis", exc_info=True)
 
     metrics.MODEL_VERSION.labels(version=model.version).set(1)
     start_hot_reload(model, redis_client)
@@ -139,7 +147,7 @@ def manual_retrain() -> Dict[str, Any]:
         try:
             redis_client.set(config.MODEL_VERSION_KEY, model.version)
         except Exception:
-            pass
+            logger.warning("could not publish retrained model version to redis", exc_info=True)
 
     metrics.MODEL_VERSION.labels(version=model.version).set(1)
     return {"status": "retrained", "model_version": model.version}

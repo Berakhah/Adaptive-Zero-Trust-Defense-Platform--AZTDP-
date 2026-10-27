@@ -1,6 +1,12 @@
 """Escalating geographic drift attack: same token, hops US -> GB -> DE -> CN."""
-from utils import base_url, default_headers, get_access_token, print_result, request_json, sleep_between
-
+from utils import (
+    base_url,
+    default_headers,
+    get_access_token,
+    print_result,
+    request_json,
+    sleep_between,
+)
 
 GEO_HOPS = [
     ("203.0.113.10", "US-CA", "aztdp-sim-us"),
@@ -14,7 +20,7 @@ def main() -> None:
     token = get_access_token()
     url = f"{base_url().rstrip('/')}/v1/payments/123"
 
-    for label, (ip, geo, ua) in zip(("us", "gb", "de", "cn"), GEO_HOPS):
+    for label, (ip, geo, ua) in zip(("us", "gb", "de", "cn"), GEO_HOPS, strict=True):
         headers = default_headers(token, ip, ua, geo)
         response = request_json("GET", url, headers)
         print_result(f"geo_drift_{label}", response)

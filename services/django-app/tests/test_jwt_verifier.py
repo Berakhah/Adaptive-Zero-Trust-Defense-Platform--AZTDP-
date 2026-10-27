@@ -1,5 +1,4 @@
 import pytest
-
 from core.jwt import JwtVerificationError, JwtVerifier
 
 

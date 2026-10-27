@@ -18,6 +18,20 @@
     <java.version>25</java.version>
   </properties>
 
+  <!-- Override the Spring Boot-managed jackson-databind 2.21.2, which has five HIGH
+       advisories fixed in 2.21.7+. Remove once the Boot BOM ships a fixed Jackson. -->
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>2.21.8</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
   <dependencies>
     <dependency>
       <groupId>org.springframework.boot</groupId>

@@ -1,0 +1,24 @@
+# Alertmanager config. No secrets live here: the webhook URL is read from a file
+# (url_file) that Compose mounts from ALERT_WEBHOOK_URL (see docker-compose.yml
+# `configs: alert_webhook_url`). Alertmanager re-reads the file on each notification.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: ops-webhook
+  group_by: [alertname, job]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 4h
+  routes:
+    # Critical alerts page quickly and re-notify often.
+    - matchers: [severity="critical"]
+      receiver: ops-webhook
+      group_wait: 10s
+      repeat_interval: 1h
+
+receivers:
+  - name: ops-webhook
+    webhook_configs:
+      - url_file: /run/secrets/alert_webhook_url
+        send_resolved: true

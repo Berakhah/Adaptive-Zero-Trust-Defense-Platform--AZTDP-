@@ -4,9 +4,7 @@ Verifies that X-Client-Ip and X-Geo headers sent by an *untrusted* client are
 ignored; only REMOTE_ADDR drives IP/geo when no trusted-proxy CIDR is configured.
 This closes the attack surface from the P1.1 audit finding.
 """
-import pytest
 from core.client_ip import parse_cidrs, resolve_client_ip, resolve_geo
-
 
 # ── Untrusted source — header values must be silently discarded ──────────────
 

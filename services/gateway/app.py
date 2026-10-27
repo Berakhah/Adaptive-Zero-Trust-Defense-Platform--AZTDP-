@@ -1,16 +1,18 @@
-from typing import Any, Dict
+from datetime import datetime, timezone
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Response
 
 from .json_logging import configure as _configure_logging
+
 _configure_logging("gateway")
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from pydantic import BaseModel
+from prometheus_client import CONTENT_TYPE_LATEST
+from pydantic import BaseModel, Field
 
 from . import config, metrics
 from .internal_auth import require_internal_token
 from .opa_client import OpaClientError, evaluate
-from .revocation_store import RevocationStore
+from .revocation_store import RevocationPersistError, RevocationStore
 from .telemetry import emit_async, shutdown_executor
 
 app = FastAPI(title="aztdp-policy-gateway")
@@ -20,10 +22,12 @@ revocations = RevocationStore()
 @app.on_event("startup")
 def _on_startup() -> None:
     revocations.cold_start_recovery()
+    revocations.start_periodic_resync(config.REVOCATION_RESYNC_INTERVAL_SECONDS)
 
 
 @app.on_event("shutdown")
-def _drain_telemetry() -> None:
+def _on_shutdown() -> None:
+    revocations.stop_periodic_resync()
     shutdown_executor()
 
 
@@ -34,7 +38,11 @@ class DecisionRequest(BaseModel):
 class RevokeRequest(BaseModel):
     token_jti_hash: str
     reason: str
-    source: str
+    # Mirrors the CHECK constraint on token_revocations.source.
+    source: Literal["policy", "admin", "session_end", "manual"]
+    # The access token's `exp` (epoch seconds); bounds the cache TTL.
+    # Bounded so the later datetime conversion cannot overflow after the revocation is stored.
+    expires_at: Optional[int] = Field(default=None, ge=0, le=4_102_444_800)  # <= year 2100
 
 
 @app.get("/health")
@@ -44,7 +52,7 @@ def health() -> Dict[str, str]:
 
 @app.get("/metrics")
 def prom_metrics() -> Response:
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    return Response(metrics.render_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.post("/v1/policy/decision", dependencies=[Depends(require_internal_token)])
@@ -60,12 +68,12 @@ def policy_decision(request: DecisionRequest) -> Dict[str, Any]:
 
     try:
         opa_response = evaluate({"input": request.input})
-    except OpaClientError:
+    except OpaClientError as exc:
         if config.FAIL_OPEN:
             decision = {"decision": "allow", "reason": {"rule": "fail_open"}}
             _emit(request_id, decision, request.input, token_hash)
             return {"decision": decision}
-        raise HTTPException(status_code=503, detail="policy_unavailable")
+        raise HTTPException(status_code=503, detail="policy_unavailable") from exc
 
     result = opa_response.get("result", opa_response)
     if isinstance(result, dict) and "decision" in result:
@@ -85,14 +93,27 @@ def policy_version() -> Dict[str, str]:
 @app.post("/v1/tokens/revoke", dependencies=[Depends(require_internal_token)])
 def revoke_token(request: RevokeRequest) -> Dict[str, Any]:
     if request.token_jti_hash:
-        revocations.revoke(request.token_jti_hash)
+        try:
+            revocations.revoke(
+                request.token_jti_hash,
+                request.expires_at,
+                reason=request.reason,
+                source=request.source,
+            )
+        except RevocationPersistError as exc:
+            # Fail closed: the caller must treat the revocation as failed and deny.
+            raise HTTPException(status_code=503, detail="revocation_not_persisted") from exc
         metrics.REVOCATIONS.inc()
+        payload: Dict[str, Any] = {"reason": request.reason, "source": request.source}
+        if request.expires_at is not None:
+            # ISO-8601 so telemetry-ingest's ::timestamptz cast accepts it.
+            payload["expires_at"] = datetime.fromtimestamp(
+                request.expires_at, tz=timezone.utc
+            ).isoformat()
+        # Audit trail (who/why); persistence already happened synchronously above.
         emit_async(
             "token_revocation",
-            {
-                "token_jti_hash": request.token_jti_hash,
-                "payload": {"reason": request.reason, "source": request.source},
-            },
+            {"token_jti_hash": request.token_jti_hash, "payload": payload},
         )
     return {"status": "revoked"}
 

@@ -1,0 +1,69 @@
+version: 2
+
+updates:
+  # Python services (one requirements.txt each)
+  - package-ecosystem: pip
+    directory: /services/gateway
+    schedule: {interval: weekly}
+  - package-ecosystem: pip
+    directory: /services/risk-engine
+    schedule: {interval: weekly}
+  - package-ecosystem: pip
+    directory: /services/anomaly-service
+    schedule: {interval: weekly}
+  - package-ecosystem: pip
+    directory: /services/telemetry-ingest
+    schedule: {interval: weekly}
+  - package-ecosystem: pip
+    directory: /services/forensics
+    schedule: {interval: weekly}
+  - package-ecosystem: pip
+    directory: /services/django-app
+    schedule: {interval: weekly}
+  - package-ecosystem: pip
+    directory: /services/attack-sim
+    schedule: {interval: weekly}
+
+  # Frontend (sentinel-command-main has the lockfile)
+  - package-ecosystem: npm
+    directory: /sentinel-command-main
+    schedule: {interval: weekly}
+
+  # Java
+  - package-ecosystem: maven
+    directory: /services/spring-app
+    schedule: {interval: weekly}
+
+  # Base images (the Dockerfiles pin digests; Dependabot proposes digest bumps)
+  - package-ecosystem: docker
+    directory: /services/gateway
+    schedule: {interval: weekly}
+  - package-ecosystem: docker
+    directory: /services/risk-engine
+    schedule: {interval: weekly}
+  - package-ecosystem: docker
+    directory: /services/anomaly-service
+    schedule: {interval: weekly}
+  - package-ecosystem: docker
+    directory: /services/telemetry-ingest
+    schedule: {interval: weekly}
+  - package-ecosystem: docker
+    directory: /services/forensics
+    schedule: {interval: weekly}
+  - package-ecosystem: docker
+    directory: /services/django-app
+    schedule: {interval: weekly}
+  - package-ecosystem: docker
+    directory: /services/spring-app
+    schedule: {interval: weekly}
+  - package-ecosystem: docker
+    directory: /infra/keycloak
+    schedule: {interval: weekly}
+  - package-ecosystem: docker
+    directory: /infra/pg-backup
+    schedule: {interval: weekly}
+
+  # Workflow actions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}

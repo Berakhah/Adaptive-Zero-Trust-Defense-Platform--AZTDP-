@@ -21,7 +21,7 @@ test_low_risk_high_sens_allows {  # was the regression that blocked all payments
 
 test_low_risk_max_sens_allows {
   decision.decision == "allow"
-  with input as _in(0.40, 5, ["user"], "/v1/admin/flags")  # not admin path-only — explicit prefix below
+  with input as _in(0.40, 5, ["user"], "/v1/payments/1")  # non-admin path: /v1/admin/* is denied for non-admins regardless of risk
 }
 
 # ── stepup band (0.65 ≤ risk < 0.90) ──

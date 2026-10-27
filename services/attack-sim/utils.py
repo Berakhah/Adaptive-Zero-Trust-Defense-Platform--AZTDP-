@@ -1,7 +1,7 @@
 import os
 import time
 import uuid
-from typing import Iterable, List, Tuple
+from typing import List, Tuple
 
 import requests
 

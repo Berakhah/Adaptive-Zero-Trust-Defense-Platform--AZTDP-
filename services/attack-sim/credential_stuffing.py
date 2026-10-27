@@ -1,4 +1,4 @@
-from utils import load_credentials, print_result, request_token, sleep_between, env
+from utils import env, load_credentials, print_result, request_token, sleep_between
 
 
 def main() -> None:

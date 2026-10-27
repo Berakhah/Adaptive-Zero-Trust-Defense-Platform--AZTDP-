@@ -8,8 +8,8 @@ from django.http import JsonResponse
 from .client_ip import parse_cidrs, resolve_client_ip, resolve_geo
 from .jwt import JwtVerificationError, JwtVerifier
 from .policy_client import PolicyClient, PolicyClientError
+from .revocation_client import RevocationClientError, TokenRevocationClient
 from .risk_client import RiskClient, RiskClientError
-from .revocation_client import TokenRevocationClient, RevocationClientError
 
 
 class RiskAuthzMiddleware:
@@ -157,26 +157,33 @@ class RiskAuthzMiddleware:
             step_up_header = request.META.get("HTTP_X_STEP_UP_TOKEN", "")
             if step_up_header:
                 from .stepup import verify_step_up_token
-                if verify_step_up_token(step_up_header, subject_id):
+                if verify_step_up_token(step_up_header, subject_id, token_jti_hash):
                     return self.get_response(request)
-            return self._stepup(reason, subject_id)
+            return self._stepup(reason, subject_id, token_jti_hash)
         if action == "revoke":
-            self._revoke(token_jti_hash, "policy")
+            # Deny regardless of whether the revocation could be recorded.
+            self._revoke(token_jti_hash, "policy", claims.get("exp"))
             return self._deny("token_revoked")
         return self._deny("policy_denied")
 
-    def _revoke(self, token_jti_hash: str, reason: str) -> None:
+    def _revoke(self, token_jti_hash: str, reason: str, expires_at: Any = None) -> None:
         if not token_jti_hash:
             return
+        payload: Dict[str, Any] = {
+            "token_jti_hash": token_jti_hash,
+            "reason": reason,
+            "source": "policy",
+        }
+        if isinstance(expires_at, (int, float)) and not isinstance(expires_at, bool):
+            payload["expires_at"] = int(expires_at)
         try:
-            self.revocation_client.revoke(
-                {"token_jti_hash": token_jti_hash, "reason": reason, "source": "policy"}
-            )
-        except RevocationClientError:
+            self.revocation_client.revoke(payload)
+        except RevocationClientError as exc:
             import logging
             logging.getLogger("aztdp.middleware").error(
-                "revocation failed for token_jti_hash=%s reason=%s — "
-                "token remains valid until expiry",
+                "revocation failed (%s) for token_jti_hash=%s reason=%s — current "
+                "request denied, but the token is not durably revoked",
+                exc.code,
                 token_jti_hash[:12] + "...",
                 reason,
             )
@@ -188,10 +195,19 @@ class RiskAuthzMiddleware:
         return 2
 
     def _is_allowlisted(self, path: str) -> bool:
-        for allowed in settings.AZTDP_ALLOWLIST_PATHS:
-            if path.startswith(allowed):
-                return True
-        return False
+        # Exact match (one trailing slash tolerated), never a bare prefix match: a
+        # prefix would let /healthz or /health/anything skip authentication. Only
+        # entries in AZTDP_ALLOWLIST_SUBTREES match their children, and only on a
+        # segment boundary with no "." / ".." segments.
+        normalized = path.rstrip("/") or "/"
+        if normalized in settings.AZTDP_ALLOWLIST_PATHS:
+            return True
+        if any(seg in (".", "..") for seg in path.split("/")):
+            return False
+        return any(
+            normalized.startswith(root + "/")
+            for root in getattr(settings, "AZTDP_ALLOWLIST_SUBTREES", [])
+        )
 
     def _unauthorized(self, code: str):
         return JsonResponse({"error": {"code": code}}, status=401)
@@ -199,11 +215,18 @@ class RiskAuthzMiddleware:
     def _deny(self, code: str):
         return JsonResponse({"error": {"code": code}}, status=403)
 
-    def _stepup(self, reason: Dict[str, Any], subject_id: str):
-        from .stepup import create_challenge, verify_step_up_token
+    def _stepup(self, reason: Dict[str, Any], subject_id: str, token_jti_hash: str = ""):
+        from .stepup import create_challenge
 
         challenge_id = reason.get("challenge_id", str(uuid.uuid4()))
-        create_challenge(challenge_id, subject_id)
+        try:
+            create_challenge(challenge_id, subject_id, token_jti_hash)
+        except Exception:
+            # Fail closed: without a stored challenge the user could never complete step-up.
+            import logging
+
+            logging.getLogger("aztdp.middleware").exception("step-up challenge store unavailable")
+            return JsonResponse({"error": {"code": "stepup_unavailable"}}, status=503)
         return JsonResponse(
             {
                 "error": {

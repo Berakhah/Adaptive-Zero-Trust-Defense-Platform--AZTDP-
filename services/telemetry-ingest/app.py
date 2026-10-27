@@ -5,14 +5,14 @@ import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Response
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST
 from pydantic import BaseModel, Field
 
-from . import config, metrics
+from . import metrics
 from .db import close_pool, get_pool
 from .internal_auth import require_internal_token
-
 from .json_logging import configure as _configure_logging
+
 _configure_logging("telemetry-ingest")
 logger = logging.getLogger("aztdp.telemetry")
 
@@ -55,14 +55,14 @@ def health() -> Dict[str, str]:
         pool = get_pool()
         with pool.connection() as conn:
             conn.execute("SELECT 1")
-    except Exception:
-        raise HTTPException(status_code=503, detail="db_unavailable")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="db_unavailable") from exc
     return {"status": "ok"}
 
 
 @app.get("/metrics")
 def prom_metrics() -> Response:
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    return Response(metrics.render_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.post("/v1/telemetry/event", dependencies=[Depends(require_internal_token)])
@@ -82,7 +82,7 @@ def ingest(event: TelemetryEvent) -> Dict[str, Any]:
     except Exception as exc:
         metrics.INGEST_ERRORS.labels(event_type=event.event_type).inc()
         logger.error("ingest failed: %s", exc)
-        raise HTTPException(status_code=500, detail="ingest_failed")
+        raise HTTPException(status_code=500, detail="ingest_failed") from exc
     finally:
         metrics.INGEST_LATENCY.observe(time.perf_counter() - start)
 
@@ -209,11 +209,11 @@ def _update_session(cur, event: TelemetryEvent) -> None:
             risk_avg      = (sessions.risk_avg * sessions.request_count + EXCLUDED.risk_max)
                               / (sessions.request_count + 1),
             decision_counts = CASE
-                WHEN %s IS NULL THEN sessions.decision_counts
+                WHEN %s::text IS NULL THEN sessions.decision_counts
                 ELSE jsonb_set(
                     sessions.decision_counts,
                     ARRAY[%s::text],
-                    to_jsonb(COALESCE((sessions.decision_counts->>%s)::int, 0) + 1)
+                    to_jsonb(COALESCE((sessions.decision_counts->>%s::text)::int, 0) + 1)
                 )
             END,
             is_suspicious = sessions.is_suspicious OR EXCLUDED.is_suspicious,
