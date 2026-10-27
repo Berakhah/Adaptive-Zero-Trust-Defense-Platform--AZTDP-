@@ -19,7 +19,7 @@ jobs:
     name: Lint and static analysis
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -45,7 +45,7 @@ jobs:
           - {service: forensics, min_cov: 60}
           - {service: django-app, min_cov: 75}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -73,7 +73,7 @@ jobs:
     name: OPA policy tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: open-policy-agent/setup-opa@v2
         with:
           version: "0.65.0"
@@ -84,7 +84,7 @@ jobs:
     name: Java (spring-app)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -101,7 +101,7 @@ jobs:
       run:
         working-directory: sentinel-command-main
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -116,7 +116,7 @@ jobs:
     name: Secrets and dependency scanning
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2
@@ -146,7 +146,7 @@ jobs:
     name: Compose, Prometheus and exposure checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The production-profile compose file refuses to start without every secret.
       - run: bash scripts/ci_env.sh
       - run: bash scripts/check_exposure.sh
@@ -164,7 +164,7 @@ jobs:
       COMPOSE_ENV_FILES: .env.dev
       COMPOSE_PROFILES: sim
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # nginx mounts infra/nginx/certs (gitignored); without a cert it crash-loops.
       - name: Generate the self-signed ingress certificate
         run: bash infra/nginx/gen-certs.sh
