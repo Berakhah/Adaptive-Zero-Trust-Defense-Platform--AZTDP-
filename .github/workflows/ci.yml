@@ -183,6 +183,10 @@ jobs:
           exit 1
       - name: Database roles and append-only audit
         run: bash scripts/db/tests/test_roles.sh
+      # Dev-mode Keycloak derives the token issuer from the request host, and Django
+      # only accepts iss=http://keycloak:8080/realms/aztdp. Fetch tokens by that name.
+      - name: Resolve keycloak to the published port
+        run: echo "127.0.0.1 keycloak" | sudo tee -a /etc/hosts
       - name: Attack-sim live tests
         env:
           AZTDP_RUN_LIVE_TESTS: "1"
@@ -190,7 +194,7 @@ jobs:
           AZTDP_BASE_URL: http://localhost:8010
           AZTDP_USERNAME: user1
           AZTDP_PASSWORD: password
-          AZTDP_KEYCLOAK_TOKEN_URL: http://localhost:8080/realms/aztdp/protocol/openid-connect/token
+          AZTDP_KEYCLOAK_TOKEN_URL: http://keycloak:8080/realms/aztdp/protocol/openid-connect/token
           AZTDP_CLIENT_ID: aztdp-client
           AZTDP_CLIENT_SECRET: aztdp-secret
         run: |
