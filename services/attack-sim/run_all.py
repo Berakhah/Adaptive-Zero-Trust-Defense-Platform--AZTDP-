@@ -2,7 +2,6 @@
 import importlib
 import sys
 
-
 SCENARIOS = [
     "brute_force",
     "credential_stuffing",

@@ -29,8 +29,8 @@ Status: ✅ Complete | 🔄 In Progress | ⬜ Pending — **All 13 phases comple
 **Output:** `docs/data-model/`, `scripts/db/`, `infra/postgres/`
 
 - [x] `docs/data-model/REDIS_PATTERNS.md` — 5 key patterns, TTLs, memory sizing
-- [x] `scripts/db/schema.sql` — 6 tables, 22 indexes, idempotent `BEGIN/COMMIT`
-- [x] `infra/postgres/init.sql` — Docker init entrypoint script
+- [x] `scripts/db/schema.sql` — 6 tables, 22 indexes, idempotent `BEGIN/COMMIT` (superseded: now `scripts/db/migrations/V1__initial_schema.sql`)
+- [x] `infra/postgres/init.sql` — Docker init entrypoint script (superseded: `db-migrate` service + `infra/postgres/04_roles.sql`)
 
 ---
 

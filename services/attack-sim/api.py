@@ -1,12 +1,21 @@
 import asyncio
 import json
+import os
 import time
-from fastapi import FastAPI, HTTPException
+
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from internal_auth import require_internal_token
 
 app = FastAPI(title="aztdp-attack-sim", version="1.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+_SIM_ORIGINS = [o.strip() for o in os.getenv("AZTDP_SIM_ORIGINS", "").split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_SIM_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-Internal-Token"],
+)
 
 SCRIPT_MAP = {
     "token_replay":        "token_replay.py",
@@ -65,7 +74,7 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/v1/sim/status")
+@app.get("/v1/sim/status", dependencies=[Depends(require_internal_token)])
 def status():
     return {
         "running": {k: v for k, v in _running.items() if v},
@@ -74,14 +83,14 @@ def status():
     }
 
 
-@app.get("/v1/sim/status/{attack_type}")
+@app.get("/v1/sim/status/{attack_type}", dependencies=[Depends(require_internal_token)])
 def status_one(attack_type: str):
     if attack_type not in SCRIPT_MAP:
         raise HTTPException(status_code=404, detail="unknown_attack_type")
     return {"attack_type": attack_type, "running": _running[attack_type], "last_result": _last_result.get(attack_type)}
 
 
-@app.post("/v1/sim/{attack_type}")
+@app.post("/v1/sim/{attack_type}", dependencies=[Depends(require_internal_token)])
 async def run_attack(attack_type: str):
     if attack_type not in SCRIPT_MAP:
         raise HTTPException(status_code=404, detail="unknown_attack_type")
@@ -97,7 +106,7 @@ async def run_attack(attack_type: str):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-@app.post("/v1/sim/all/run")
+@app.post("/v1/sim/all/run", dependencies=[Depends(require_internal_token)])
 async def run_all():
     if any(_running.values()):
         raise HTTPException(status_code=409, detail="attack_already_running")

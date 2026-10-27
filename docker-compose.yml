@@ -1,14 +1,37 @@
-version: "3.8"
-
 networks:
   aztdp:
     driver: bridge
+    # Pinned so nginx (the only trusted proxy) has a stable address. Django and
+    # Spring trust client-IP/geo headers only from that single address.
+    #
+    # ip_range confines dynamically assigned container addresses to 172.28.64.0/18,
+    # so nothing can claim 172.28.0.10 before nginx starts (measured: without it, with
+    # nginx last in the start order, another service took .10 and nginx failed to start).
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+          ip_range: 172.28.64.0/18
 
 volumes:
   postgres_data:
+  # Backup sets (infra/pg-backup). Same host as postgres_data: NOT disaster
+  # recovery until copied off-host (docs/runbooks/BACKUP_RESTORE.md).
+  pg_backups:
+  redis_data:
   grafana_data:
   anomaly_models:
   prometheus_data:
+  alertmanager_data:
+
+secrets:
+  # Webhook URL delivered as a file (/run/secrets/alert_webhook_url): kept out of
+  # the committed config and out of container env/args (so not in `docker inspect`).
+  alert_webhook_url:
+    environment: ALERT_WEBHOOK_URL
+
+# Fail closed: refuse to start without a webhook URL (the secret above is only a
+# pass-through of the variable, so it cannot carry a :? guard itself).
+x-require-alert-webhook: ${ALERT_WEBHOOK_URL:?ALERT_WEBHOOK_URL is required (see .env.example)}
 
 services:
 
@@ -16,17 +39,20 @@ services:
 
   postgres:
     image: postgres:16-alpine
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 300
+    restart: unless-stopped
     environment:
       POSTGRES_DB: aztdp
+      # Bootstrap superuser: used only by db-migrate and break-glass admin. No
+      # service connects as it; each has its own role (infra/postgres/04_roles.sql).
       POSTGRES_USER: aztdp
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (see .env.example)}
+    # No docker-entrypoint-initdb.d scripts: schema, roles and grants are applied
+    # by db-migrate on every deploy (initdb scripts would only ever run once).
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
-      - ./scripts/db/schema.sql:/docker-entrypoint-initdb.d/02_schema.sql:ro
-      - ./infra/postgres/03_grants.sql:/docker-entrypoint-initdb.d/03_grants.sql:ro
-    ports:
-      - "5432:5432"
     networks:
       - aztdp
     healthcheck:
@@ -35,47 +61,122 @@ services:
       timeout: 5s
       retries: 10
 
-  redis:
-    image: redis:7.2-alpine
-    command: redis-server /usr/local/etc/redis/redis.conf
-    volumes:
-      - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
-    ports:
-      - "6379:6379"
-    networks:
-      - aztdp
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
-  keycloak:
-    image: quay.io/keycloak/keycloak:25.0
+  # One-shot: roles + versioned migrations + grants (scripts/db/migrate.sh).
+  # Every service that touches Postgres waits for it to exit 0.
+  db-migrate:
+    image: postgres:16-alpine
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 100
+    entrypoint: ["sh", "/aztdp/scripts/db/migrate.sh"]
+    user: postgres
+    read_only: true
+    tmpfs:
+      - /tmp
     environment:
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
-      KC_BOOTSTRAP_ADMIN_USERNAME: admin
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
-      KC_HEALTH_ENABLED: "true"
-      KC_METRICS_ENABLED: "true"
-      KC_DB: postgres
-      KC_DB_URL: jdbc:postgresql://postgres:5432/aztdp
-      KC_DB_USERNAME: aztdp
-      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
-      KC_HOSTNAME_STRICT: "false"
-      KC_HTTP_ENABLED: "true"
-    command: ["start-dev", "--import-realm"]
+      PGHOST: postgres
+      PGUSER: aztdp
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (see .env.example)}
+      PG_OWNER_PASSWORD: ${PG_OWNER_PASSWORD:?PG_OWNER_PASSWORD is required (see .env.example)}
+      PG_INGEST_PASSWORD: ${PG_INGEST_PASSWORD:?PG_INGEST_PASSWORD is required (see .env.example)}
+      PG_FORENSICS_PASSWORD: ${PG_FORENSICS_PASSWORD:?PG_FORENSICS_PASSWORD is required (see .env.example)}
+      PG_GATEWAY_PASSWORD: ${PG_GATEWAY_PASSWORD:?PG_GATEWAY_PASSWORD is required (see .env.example)}
+      PG_ANOMALY_PASSWORD: ${PG_ANOMALY_PASSWORD:?PG_ANOMALY_PASSWORD is required (see .env.example)}
+      PG_DJANGO_PASSWORD: ${PG_DJANGO_PASSWORD:?PG_DJANGO_PASSWORD is required (see .env.example)}
+      PG_KEYCLOAK_PASSWORD: ${PG_KEYCLOAK_PASSWORD:?PG_KEYCLOAK_PASSWORD is required (see .env.example)}
     volumes:
-      - ./infra/keycloak:/opt/keycloak/data/import:ro
-    ports:
-      - "8080:8080"
-      - "9000:9000"
+      - ./scripts/db:/aztdp/scripts/db:ro
+      - ./infra/postgres:/aztdp/infra/postgres:ro
+    restart: "no"
     networks:
       - aztdp
     depends_on:
       postgres:
         condition: service_healthy
+
+  # Daily pg_dump of all databases + roles into the pg_backups volume; 7 daily /
+  # 4 weekly retention. Redis is intentionally not backed up (rebuilt from
+  # Postgres). No published ports. Verified by scripts/backup/pg_restore_test.sh.
+  pg-backup:
+    build: ./infra/pg-backup
+    mem_limit: 256m
+    cpus: 0.25
+    pids_limit: 100
+    # Bootstrap superuser: pg_dumpall needs it to read role password hashes.
+    environment:
+      PGHOST: postgres
+      PGUSER: aztdp
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required (see .env.example)}
+    volumes:
+      - pg_backups:/backups
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    networks:
+      - aztdp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+
+  redis:
+    image: redis:7.2-alpine
+    mem_limit: 320m
+    cpus: 0.5
+    pids_limit: 100
+    restart: unless-stopped
+    command: ["sh", "-c", "redis-server /usr/local/etc/redis/redis.conf --requirepass \"$$REDIS_PASSWORD\""]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required (see .env.example)}
+    volumes:
+      - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - redis_data:/data
+    networks:
+      - aztdp
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  keycloak:
+    build: ./infra/keycloak
+    mem_limit: 1g
+    cpus: 1.5
+    pids_limit: 500
+    restart: unless-stopped
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD is required (see .env.example)}
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD is required (see .env.example)}
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_DB: postgres
+      # Own database and role (db-migrate): a Keycloak compromise cannot reach audit data.
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${PG_KEYCLOAK_PASSWORD:?PG_KEYCLOAK_PASSWORD is required (see .env.example)}
+      # Issuer must match AZTDP_OIDC_ISSUER. Keycloak is not published to the
+      # host and is reachable only on the private network, so plain HTTP stays
+      # enabled for service-to-service JWKS fetches; external clients would
+      # reach it only through a TLS ingress that sets X-Forwarded-*.
+      KC_HOSTNAME: ${KC_HOSTNAME:-http://keycloak:8080}
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: "true"
+      # Substituted into the realm import (infra/keycloak/aztdp-realm.json).
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:?KEYCLOAK_CLIENT_SECRET is required (see .env.example)}
+    command: ["start", "--optimized", "--import-realm"]
+    networks:
+      - aztdp
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/9000; printf \"GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n\" >&3; read -r status <&3; case \"$$status\" in *\" 200 \"*) exit 0 ;; *) exit 1 ;; esac' "]
       interval: 15s
@@ -85,11 +186,13 @@ services:
 
   opa:
     image: openpolicyagent/opa:0.65.0
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 100
+    restart: unless-stopped
     command: ["run", "--server", "--addr", "0.0.0.0:8181", "/policies"]
     volumes:
       - ./policies:/policies:ro
-    ports:
-      - "8181:8181"
     networks:
       - aztdp
     healthcheck:
@@ -102,15 +205,28 @@ services:
 
   gateway:
     build: ./services/gateway
+    mem_limit: 384m
+    cpus: 1.0
+    pids_limit: 200
+    stop_grace_period: 15s
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
     environment:
+      # uvicorn reads UVICORN_WORKERS natively (exec-form CMD in the image is
+      # untouched). Redis/Postgres hold all shared state; /metrics is aggregated
+      # across workers via prometheus_client multiprocess mode (tmpfs dir).
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prom
       AZTDP_OPA_URL: http://opa:8181
-      AZTDP_REDIS_URL: redis://redis:6379/0
+      AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED:?REDIS_PASSWORD_URLENCODED is required (URL-encoded REDIS_PASSWORD)}@redis:6379/0
       AZTDP_TELEMETRY_URL: http://telemetry-ingest:8080
       AZTDP_FAIL_OPEN: "false"
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
-      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
-    ports:
-      - "8000:8080"
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
+      # Password via libpq's PGPASSWORD, so it never needs URL-encoding.
+      AZTDP_DB_URL: postgresql://aztdp_gateway@postgres:5432/aztdp
+      PGPASSWORD: ${PG_GATEWAY_PASSWORD:?PG_GATEWAY_PASSWORD is required (see .env.example)}
     networks:
       - aztdp
     depends_on:
@@ -118,8 +234,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 10s
@@ -128,13 +244,24 @@ services:
 
   risk-engine:
     build: ./services/risk-engine
+    mem_limit: 384m
+    cpus: 1.0
+    pids_limit: 200
+    stop_grace_period: 15s
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
     environment:
-      AZTDP_REDIS_URL: redis://redis:6379/0
+      # uvicorn reads UVICORN_WORKERS natively (exec-form CMD in the image is
+      # untouched). Redis/Postgres hold all shared state; /metrics is aggregated
+      # across workers via prometheus_client multiprocess mode (tmpfs dir).
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prom
+      AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED:?REDIS_PASSWORD_URLENCODED is required (URL-encoded REDIS_PASSWORD)}@redis:6379/0
       AZTDP_ANOMALY_URL: http://anomaly-service:8080
       AZTDP_TELEMETRY_URL: http://telemetry-ingest:8080
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
-    ports:
-      - "8001:8080"
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
     networks:
       - aztdp
     depends_on:
@@ -148,22 +275,32 @@ services:
 
   anomaly-service:
     build: ./services/anomaly-service
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 200
+    stop_grace_period: 15s
+    restart: unless-stopped
     environment:
-      AZTDP_REDIS_URL: redis://redis:6379/0
-      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
+      # MUST stay a single worker: the model lives in-process and the training
+      # scheduler runs in-process, so N workers would each hold a divergent model
+      # and run N schedulers. Pinned here so a host UVICORN_WORKERS cannot change it.
+      UVICORN_WORKERS: "1"
+      AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED:?REDIS_PASSWORD_URLENCODED is required (URL-encoded REDIS_PASSWORD)}@redis:6379/0
+      # Password via libpq's PGPASSWORD, so it never needs URL-encoding.
+      AZTDP_DB_URL: postgresql://aztdp_anomaly@postgres:5432/aztdp
+      PGPASSWORD: ${PG_ANOMALY_PASSWORD:?PG_ANOMALY_PASSWORD is required (see .env.example)}
       AZTDP_MODEL_DIR: /app/models
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
+      AZTDP_MODEL_HMAC_KEY: ${AZTDP_MODEL_HMAC_KEY:?AZTDP_MODEL_HMAC_KEY is required (see .env.example)}
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
     volumes:
       - anomaly_models:/app/models
-    ports:
-      - "8002:8080"
     networks:
       - aztdp
     depends_on:
       redis:
         condition: service_healthy
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 10s
@@ -172,16 +309,29 @@ services:
 
   telemetry-ingest:
     build: ./services/telemetry-ingest
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 200
+    stop_grace_period: 15s
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
     environment:
-      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
-    ports:
-      - "8003:8080"
+      # uvicorn reads UVICORN_WORKERS natively (exec-form CMD in the image is
+      # untouched). Redis/Postgres hold all shared state; /metrics is aggregated
+      # across workers via prometheus_client multiprocess mode (tmpfs dir).
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prom
+      # Password via libpq's PGPASSWORD, so it never needs URL-encoding.
+      AZTDP_DB_URL: postgresql://aztdp_ingest@postgres:5432/aztdp
+      PGPASSWORD: ${PG_INGEST_PASSWORD:?PG_INGEST_PASSWORD is required (see .env.example)}
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
     networks:
       - aztdp
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 10s
@@ -190,15 +340,28 @@ services:
 
   forensics:
     build: ./services/forensics
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 200
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
     environment:
-      AZTDP_DB_URL: postgresql://aztdp:${POSTGRES_PASSWORD_URLENCODED}@postgres:5432/aztdp
-    ports:
-      - "8004:8080"
+      # uvicorn reads UVICORN_WORKERS natively (exec-form CMD in the image is
+      # untouched). Redis/Postgres hold all shared state; /metrics is aggregated
+      # across workers via prometheus_client multiprocess mode (tmpfs dir).
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prom
+      # Password via libpq's PGPASSWORD, so it never needs URL-encoding.
+      AZTDP_DB_URL: postgresql://aztdp_forensics@postgres:5432/aztdp
+      PGPASSWORD: ${PG_FORENSICS_PASSWORD:?PG_FORENSICS_PASSWORD is required (see .env.example)}
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
     networks:
       - aztdp
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 10s
@@ -209,15 +372,24 @@ services:
 
   django-app:
     build: ./services/django-app
-    environment:
-      AZTDP_SECRET_KEY: ${AZTDP_SECRET_KEY}
-      AZTDP_DEBUG: "true"
-      AZTDP_ALLOWED_HOSTS: ${AZTDP_ALLOWED_HOSTS:-localhost,127.0.0.1,django-app}
+    mem_limit: 512m
+    cpus: 1.5
+    pids_limit: 200
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment: &django-env
+      AZTDP_SECRET_KEY: ${AZTDP_SECRET_KEY:?AZTDP_SECRET_KEY is required, >=32 random chars (see .env.example)}
+      AZTDP_DEBUG: "false"
+      AZTDP_ALLOWED_HOSTS: ${AZTDP_ALLOWED_HOSTS:?AZTDP_ALLOWED_HOSTS is required, comma-separated hostnames (see .env.example)}
       AZTDP_TIMEOUT_CONNECT: "1.0"
       AZTDP_DB_HOST: postgres
-      AZTDP_DB_NAME: aztdp
-      AZTDP_DB_USER: aztdp
-      AZTDP_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      # Own database (owned by aztdp_django) so `migrate` has DDL rights without
+      # any access to the audit tables in the aztdp database.
+      AZTDP_DB_NAME: aztdp_django
+      AZTDP_DB_USER: aztdp_django
+      AZTDP_DB_PASSWORD: ${PG_DJANGO_PASSWORD:?PG_DJANGO_PASSWORD is required (see .env.example)}
       AZTDP_DB_PORT: "5432"
       AZTDP_OIDC_ISSUER: http://keycloak:8080/realms/aztdp
       AZTDP_JWKS_URL: http://keycloak:8080/realms/aztdp/protocol/openid-connect/certs
@@ -226,16 +398,22 @@ services:
       AZTDP_POLICY_GATEWAY_URL: http://gateway:8080
       AZTDP_TOKEN_REVOKE_URL: http://gateway:8080/v1/tokens/revoke
       AZTDP_FAIL_OPEN: "false"
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
-    command: >
-      sh -c "python manage.py migrate --noinput &&
-             gunicorn aztdp_django.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 30"
-    ports:
-      - "8010:8000"
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
+      AZTDP_REDIS_URL: redis://:${REDIS_PASSWORD_URLENCODED:?REDIS_PASSWORD_URLENCODED is required (URL-encoded REDIS_PASSWORD)}@redis:6379/0
+      AZTDP_STEPUP_SIGNING_KEY: ${AZTDP_STEPUP_SIGNING_KEY:?AZTDP_STEPUP_SIGNING_KEY is required (see .env.example)}
+      AZTDP_TOTP_MASTER_SECRET: ${AZTDP_TOTP_MASTER_SECRET:?AZTDP_TOTP_MASTER_SECRET is required (see .env.example)}
+      # Only nginx may assert client IP / geo.
+      AZTDP_TRUSTED_PROXIES: 172.28.0.10/32
+    # CMD from the image (gunicorn on 8000); schema migration runs once in
+    # django-migrate, never from N racing workers.
     networks:
       - aztdp
     depends_on:
+      django-migrate:
+        condition: service_completed_successfully
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       keycloak:
         condition: service_healthy
@@ -244,17 +422,37 @@ services:
       risk-engine:
         condition: service_healthy
 
+  # One-shot Django schema migration (its own database, created by db-migrate).
+  django-migrate:
+    build: ./services/django-app
+    mem_limit: 384m
+    cpus: 0.5
+    pids_limit: 100
+    environment: *django-env
+    command: ["python", "manage.py", "migrate", "--noinput"]
+    restart: "no"
+    healthcheck:
+      disable: true
+    networks:
+      - aztdp
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+
   spring-app:
     build: ./services/spring-app
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 500
+    restart: unless-stopped
     environment:
       AZTDP_RISK_ENGINE_URL: http://risk-engine:8080
       AZTDP_POLICY_GATEWAY_URL: http://gateway:8080
       AZTDP_TOKEN_REVOKE_URL: http://gateway:8080/v1/tokens/revoke
       AZTDP_OIDC_ISSUER: http://keycloak:8080/realms/aztdp
       AZTDP_FAIL_OPEN: "false"
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
-    ports:
-      - "8011:8082"
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
+      AZTDP_TRUSTED_PROXIES: 172.28.0.10/32
     networks:
       - aztdp
     depends_on:
@@ -269,6 +467,10 @@ services:
 
   nginx:
     image: nginx:1.27-alpine
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 100
+    restart: unless-stopped
     volumes:
       - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./infra/nginx/certs:/etc/nginx/certs:ro
@@ -277,14 +479,20 @@ services:
       - "443:443"
       - "8443:8443"
       - "3443:3443"
+      - "9443:9443"
     networks:
-      - aztdp
+      aztdp:
+        ipv4_address: 172.28.0.10
     depends_on:
       - django-app
       - spring-app
       - grafana
+      - dashboard
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/"]
+      # 127.0.0.1, not localhost: nginx:alpine resolves localhost to ::1 and nginx
+      # listens on IPv4 only. Port 80 only redirects to https (self-signed cert), so
+      # assert on the 301 itself rather than following it.
+      test: ["CMD-SHELL", "wget -S --spider --tries=1 http://127.0.0.1:80/ 2>&1 | grep -q 'HTTP/1.1 301'"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -293,6 +501,10 @@ services:
 
   prometheus:
     image: prom/prometheus:v2.53.0
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 100
+    restart: unless-stopped
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -303,68 +515,73 @@ services:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./infra/prometheus/rules:/etc/prometheus/rules:ro
       - prometheus_data:/prometheus
-    ports:
-      - "9090:9090"
     networks:
       - aztdp
 
+  alertmanager:
+    # Pinned by index digest (tag v0.28.1; v0.27.0 panics on non-2xx webhook responses when url_file is used).
+    image: prom/alertmanager:v0.28.1@sha256:27c475db5fb156cab31d5c18a4251ac7ed567746a2483ff264516437a39b15ba
+    user: "65534:65534"
+    # Not read_only: Compose refuses to materialise an env-sourced secret into a
+    # read-only service (only `file:` secrets are allowed there). Mitigated by
+    # non-root, cap_drop ALL and no-new-privileges.
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    volumes:
+      - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    secrets:
+      - source: alert_webhook_url
+        target: alert_webhook_url
+        mode: 0444
+    networks:
+      - aztdp
+    mem_limit: 256m
+    pids_limit: 100
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   grafana:
     image: grafana/grafana:11.1.0
+    mem_limit: 384m
+    cpus: 0.5
+    pids_limit: 100
+    restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required (see .env.example)}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/policy-decisions.json
     volumes:
       - grafana_data:/var/lib/grafana
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
-    ports:
-      - "3000:3000"
     networks:
       - aztdp
     depends_on:
       - prometheus
 
-  # ── Attack Simulation API ─────────────────────────────────────────────────────
-
-  attack-sim:
-    build: ./services/attack-sim
-    environment:
-      AZTDP_BASE_URL: http://django-app:8000
-      AZTDP_KEYCLOAK_TOKEN_URL: http://keycloak:8080/realms/aztdp/protocol/openid-connect/token
-      AZTDP_CLIENT_ID: aztdp-client
-      AZTDP_CLIENT_SECRET: aztdp-secret
-      AZTDP_USERNAME: risk_user
-      AZTDP_PASSWORD: password
-      AZTDP_ATTACK_USERNAME: user1
-      AZTDP_ATTACK_PASSWORD: password
-      AZTDP_PASSWORD_LIST: wrong1,wrong2,wrong3,password
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
-      AZTDP_REQUEST_DELAY_MS: "200"
-    ports:
-      - "8090:8090"
-    networks:
-      - aztdp
-    depends_on:
-      gateway:
-        condition: service_healthy
-      keycloak:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8090/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   # ── SOC Dashboard ─────────────────────────────────────────────────────────────
 
   dashboard:
     build: ./services/dashboard
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 50
+    restart: unless-stopped
     environment:
-      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN}
-    ports:
-      - "8099:8099"
+      AZTDP_INTERNAL_TOKEN: ${AZTDP_INTERNAL_TOKEN:?AZTDP_INTERNAL_TOKEN is required (see .env.example)}
+      # Full htpasswd line (user:hash), e.g. `echo "soc:$(openssl passwd -apr1)"`.
+      # Single-quote it in .env so the $ characters are not interpolated.
+      DASHBOARD_HTPASSWD: ${DASHBOARD_HTPASSWD:?DASHBOARD_HTPASSWD is required, a full htpasswd line (see .env.example)}
     networks:
       - aztdp
     depends_on:
@@ -374,9 +591,8 @@ services:
       - anomaly-service
       - telemetry-ingest
       - prometheus
-      - attack-sim
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8099/"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8099/healthz"]
       interval: 10s
       timeout: 5s
       retries: 5

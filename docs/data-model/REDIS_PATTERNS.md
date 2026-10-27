@@ -8,11 +8,11 @@ Redis is used for two distinct concerns: **session state** (token tracking for r
 
 | Setting | Value | Notes |
 |---|---|---|
-| URL env var | `AZTDP_REDIS_URL` | Format: `redis://[password@]host:port/db` |
-| Default (dev) | `redis://redis:6379/0` | No auth in dev |
+| URL env var | `AZTDP_REDIS_URL` | Format: `redis://:<password>@host:port/db` (password URL-encoded) |
+| Compose value | `redis://:${REDIS_PASSWORD_URLENCODED}@redis:6379/0` | `requirepass` is always on; `REDIS_PASSWORD` and `REDIS_PASSWORD_URLENCODED` are required (dev values come from `.env.dev`) |
 | Max memory | 256 MB | `maxmemory 256mb` in `infra/redis/redis.conf` |
-| Eviction policy | `allkeys-lru` | Safe for cache-only workloads; stale session state expires naturally |
-| Persistence | `save 900 1` + `save 300 10` | RDB snapshots; not AOF — data is reconstructable from app state |
+| Eviction policy | `noeviction` | Revocation and step-up state must never be silently evicted; writes fail instead |
+| Persistence | AOF (`appendfsync everysec`) + `save 300 10` | Revocation and step-up lockout state survive restarts |
 
 ---
 
@@ -207,8 +207,8 @@ Well within the 256 MB `maxmemory` limit. `allkeys-lru` eviction means Redis wil
 
 | Concern | Dev (docker-compose) | Production |
 |---|---|---|
-| Auth | None (`requirepass ""`) | Set `requirepass` or use ACLs |
-| Persistence | RDB snapshots (`save 900 1`) | AOF for revocation durability, or skip persistence (reconstructable) |
+| Auth | `requirepass` (dev password from `.env.dev`) | `requirepass` with a random secret, or ACLs |
+| Persistence | AOF + RDB snapshot | AOF for revocation durability |
 | Separate databases | All in db 0 | Consider db 0 for session state, db 1 for revocation, db 2 for anomaly |
 | TLS | None | TLS between services in K8s (use `rediss://` URL scheme) |
 | Replication | Single node | Redis Sentinel or Redis Cluster for HA |

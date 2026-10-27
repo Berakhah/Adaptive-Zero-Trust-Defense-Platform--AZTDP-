@@ -1,22 +1,27 @@
 import logging
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Query, Response
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from fastapi import Depends, FastAPI, HTTPException, Query, Response
+from prometheus_client import CONTENT_TYPE_LATEST
 
 from . import config, metrics
 from .db import close_pool, get_pool
-
+from .internal_auth import _expected_token, require_internal_token
 from .json_logging import configure as _configure_logging
+
 _configure_logging("forensics")
 logger = logging.getLogger("aztdp.forensics")
 
 app = FastAPI(title="aztdp-forensics")
 
+_auth = [Depends(require_internal_token)]
+
 
 @app.on_event("startup")
 def _on_startup() -> None:
+    _expected_token()  # refuse to start with open internal endpoints
     try:
         get_pool().open()
     except Exception as exc:
@@ -33,25 +38,25 @@ def health() -> Dict[str, str]:
     try:
         with get_pool().connection() as conn:
             conn.execute("SELECT 1")
-    except Exception:
-        raise HTTPException(status_code=503, detail="db_unavailable")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="db_unavailable") from exc
     return {"status": "ok"}
 
 
 @app.get("/metrics")
 def prom_metrics() -> Response:
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    return Response(metrics.render_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
-@app.get("/v1/forensics/events")
+@app.get("/v1/forensics/events", dependencies=_auth)
 def list_events(
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
     request_id: Optional[str] = None,
     event_type: Optional[str] = None,
     ip: Optional[str] = None,
-    since: Optional[str] = Query(None, description="ISO8601"),
-    until: Optional[str] = Query(None, description="ISO8601"),
+    since: Optional[datetime] = Query(None, description="ISO8601"),
+    until: Optional[datetime] = Query(None, description="ISO8601"),
     limit: int = Query(config.DEFAULT_PAGE_SIZE, ge=1, le=config.MAX_PAGE_SIZE),
     offset: int = Query(0, ge=0),
 ) -> Dict[str, Any]:
@@ -75,13 +80,14 @@ def list_events(
         if ip:
             clauses.append("ip = %s")
             params.append(ip)
-        if since:
+        if since is not None:
             clauses.append("occurred_at >= %s::timestamptz")
             params.append(since)
-        if until:
+        if until is not None:
             clauses.append("occurred_at <= %s::timestamptz")
             params.append(until)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        # Only fixed clause strings are interpolated; every value is a bound %s parameter.
         sql = f"""
             SELECT event_id, event_type, service, request_id, session_id,
                    user_id, token_jti_hash, ip, geo, payload, occurred_at
@@ -89,7 +95,7 @@ def list_events(
             {where}
             ORDER BY occurred_at DESC
             LIMIT %s OFFSET %s
-        """
+        """  # noqa: S608  # nosec B608
         params.extend([limit, offset])
         with get_pool().connection() as conn:
             rows = list(conn.execute(sql, params).fetchall())
@@ -98,7 +104,7 @@ def list_events(
         metrics.QUERY_LATENCY.labels(endpoint="events").observe(time.perf_counter() - start)
 
 
-@app.get("/v1/forensics/replay/{session_id}")
+@app.get("/v1/forensics/replay/{session_id}", dependencies=_auth)
 def replay_session(session_id: str) -> Dict[str, Any]:
     metrics.QUERY_COUNT.labels(endpoint="replay").inc()
     start = time.perf_counter()
@@ -124,7 +130,7 @@ def replay_session(session_id: str) -> Dict[str, Any]:
         metrics.QUERY_LATENCY.labels(endpoint="replay").observe(time.perf_counter() - start)
 
 
-@app.get("/v1/forensics/incidents/{request_id}")
+@app.get("/v1/forensics/incidents/{request_id}", dependencies=_auth)
 def incident_detail(request_id: str) -> Dict[str, Any]:
     metrics.QUERY_COUNT.labels(endpoint="incidents").inc()
     start = time.perf_counter()

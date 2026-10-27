@@ -1,4 +1,5 @@
 worker_processes auto;
+pid /tmp/nginx.pid;
 events { worker_connections 1024; }
 
 http {
@@ -10,6 +11,8 @@ http {
     gzip_types text/html text/css application/javascript application/json;
 
     server {
+        # Plain HTTP on the internal port only; Task 4 fronts this with an nginx
+        # TLS server. Do not publish this port publicly.
         listen 8099;
         server_name _;
         root /usr/share/nginx/html;
@@ -18,101 +21,149 @@ http {
         add_header X-Frame-Options SAMEORIGIN always;
         add_header X-Content-Type-Options nosniff always;
 
+        # Interim gate (real SSO via oauth2-proxy -> Keycloak is a follow-up).
+        # /etc/nginx/htpasswd is generated at start from $DASHBOARD_HTPASSWD.
+        auth_basic "AZTDP SOC";
+        auth_basic_user_file /etc/nginx/htpasswd;
+
+        # Container healthcheck endpoint (no credentials, no upstream).
+        location = /healthz {
+            auth_basic off;
+            access_log off;
+            return 200 "ok
+";
+        }
+
+        # Anything under /api/ not allow-listed below does not exist.
+        location /api/ {
+            return 404;
+        }
+
         location / {
             try_files $uri $uri/ /index.html;
         }
 
         # Attack-sim SSE proxy (buffering disabled for streaming)
+        # attack-sim exists only under the dev "sim" profile. Resolve it lazily
+        # (variable + resolver) so this server starts when the host is absent.
         location /api/sim/ {
+            resolver 127.0.0.11 valid=10s ipv6=off;
+            set $sim_upstream attack-sim:8090;
             rewrite ^/api/sim/(.*) /$1 break;
-            proxy_pass http://attack-sim:8090;
+            proxy_pass http://$sim_upstream;
+            proxy_set_header X-Internal-Token "${AZTDP_INTERNAL_TOKEN}";
             proxy_set_header Host $host;
+            proxy_set_header Authorization "";  # never forward the SOC basic-auth credentials
             proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Client-Ip $remote_addr;
             proxy_buffering off;
             proxy_cache off;
             proxy_read_timeout 3600s;
             chunked_transfer_encoding on;
         }
 
-        # Forensics (no auth required)
+        # Forensics: read-only (internal token injected server-side)
         location /api/forensics/ {
+            limit_except GET { deny all; }
             rewrite ^/api/forensics/(.*) /$1 break;
             proxy_pass http://forensics:8080;
             proxy_set_header Host $host;
+            proxy_set_header Authorization "";  # never forward the SOC basic-auth credentials
+            proxy_set_header X-Internal-Token "${AZTDP_INTERNAL_TOKEN}";
         }
 
-        # Prometheus
-        location /api/prometheus/ {
+        # Prometheus: instant/range queries only
+        location /api/prometheus/api/v1/query {
+            limit_except GET { deny all; }
             rewrite ^/api/prometheus/(.*) /$1 break;
             proxy_pass http://prometheus:9090;
             proxy_set_header Host $host;
+            proxy_set_header Authorization "";  # never forward the SOC basic-auth credentials
         }
 
-        # Keycloak (management health)
-        location /api/keycloak/ {
-            rewrite ^/api/keycloak/(.*) /$1 break;
-            proxy_pass http://keycloak:9000;
+        # Health probes (GET only). Everything else under these services is NOT proxied.
+
+        location = /api/gateway/health {
+            limit_except GET { deny all; }
+            proxy_pass http://gateway:8080/health;
             proxy_set_header Host $host;
+            proxy_set_header Authorization "";  # never forward the SOC basic-auth credentials
+            proxy_set_header X-Internal-Token "${AZTDP_INTERNAL_TOKEN}";
         }
 
-        # OPA
-        location /api/opa/ {
-            rewrite ^/api/opa/(.*) /$1 break;
-            proxy_pass http://opa:8181;
+        location = /api/risk/health {
+            limit_except GET { deny all; }
+            proxy_pass http://risk-engine:8080/health;
             proxy_set_header Host $host;
+            proxy_set_header Authorization "";  # never forward the SOC basic-auth credentials
+            proxy_set_header X-Internal-Token "${AZTDP_INTERNAL_TOKEN}";
         }
 
-        # Grafana
-        location /api/grafana/ {
-            rewrite ^/api/grafana/(.*) /$1 break;
-            proxy_pass http://grafana:3000;
+        location = /api/anomaly/health {
+            limit_except GET { deny all; }
+            proxy_pass http://anomaly-service:8080/health;
             proxy_set_header Host $host;
+            proxy_set_header Authorization "";  # never forward the SOC basic-auth credentials
+            proxy_set_header X-Internal-Token "${AZTDP_INTERNAL_TOKEN}";
         }
 
-        # Gateway (requires internal token)
-        location /api/gateway/ {
-            rewrite ^/api/gateway/(.*) /$1 break;
-            proxy_pass http://gateway:8080;
+        location = /api/telemetry/health {
+            limit_except GET { deny all; }
+            proxy_pass http://telemetry-ingest:8080/health;
             proxy_set_header Host $host;
-            proxy_set_header Authorization "Bearer ${AZTDP_INTERNAL_TOKEN}";
+            proxy_set_header Authorization "";  # never forward the SOC basic-auth credentials
+            proxy_set_header X-Internal-Token "${AZTDP_INTERNAL_TOKEN}";
         }
 
-        # Risk engine
-        location /api/risk/ {
-            rewrite ^/api/risk/(.*) /$1 break;
-            proxy_pass http://risk-engine:8080;
+        location = /api/forensics/health {
+            limit_except GET { deny all; }
+            proxy_pass http://forensics:8080/health;
             proxy_set_header Host $host;
-            proxy_set_header Authorization "Bearer ${AZTDP_INTERNAL_TOKEN}";
+            proxy_set_header Authorization "";  # never forward the SOC basic-auth credentials
+            proxy_set_header X-Internal-Token "${AZTDP_INTERNAL_TOKEN}";
         }
 
-        # Anomaly service
-        location /api/anomaly/ {
-            rewrite ^/api/anomaly/(.*) /$1 break;
-            proxy_pass http://anomaly-service:8080;
+        location = /api/django/health {
+            limit_except GET { deny all; }
+            proxy_pass http://django-app:8000/health;
             proxy_set_header Host $host;
-            proxy_set_header Authorization "Bearer ${AZTDP_INTERNAL_TOKEN}";
+            proxy_set_header Authorization "";  # never forward the SOC basic-auth credentials
         }
 
-        # Telemetry
-        location /api/telemetry/ {
-            rewrite ^/api/telemetry/(.*) /$1 break;
-            proxy_pass http://telemetry-ingest:8080;
+        location = /api/spring/actuator/health {
+            limit_except GET { deny all; }
+            proxy_pass http://spring-app:8082/actuator/health;
             proxy_set_header Host $host;
-            proxy_set_header Authorization "Bearer ${AZTDP_INTERNAL_TOKEN}";
+            proxy_set_header Authorization "";  # never forward the SOC basic-auth credentials
         }
 
-        # Django app
-        location /api/django/ {
-            rewrite ^/api/django/(.*) /$1 break;
-            proxy_pass http://django-app:8000;
+        location = /api/keycloak/health/ready {
+            limit_except GET { deny all; }
+            proxy_pass http://keycloak:9000/health/ready;
             proxy_set_header Host $host;
+            proxy_set_header Authorization "";  # never forward the SOC basic-auth credentials
         }
 
-        # Spring app
-        location /api/spring/ {
-            rewrite ^/api/spring/(.*) /$1 break;
-            proxy_pass http://spring-app:8082;
+        location = /api/opa/health {
+            limit_except GET { deny all; }
+            proxy_pass http://opa:8181/health;
             proxy_set_header Host $host;
+            proxy_set_header Authorization "";  # never forward the SOC basic-auth credentials
+        }
+
+        location = /api/prometheus/-/healthy {
+            limit_except GET { deny all; }
+            proxy_pass http://prometheus:9090/-/healthy;
+            proxy_set_header Host $host;
+            proxy_set_header Authorization "";  # never forward the SOC basic-auth credentials
+        }
+
+        location = /api/grafana/api/health {
+            limit_except GET { deny all; }
+            proxy_pass http://grafana:3000/api/health;
+            proxy_set_header Host $host;
+            proxy_set_header Authorization "";  # never forward the SOC basic-auth credentials
         }
     }
 }

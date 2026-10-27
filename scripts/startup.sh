@@ -78,7 +78,8 @@ echo -e "\n${YELLOW}→ Waiting for services to initialize...${NC}"
 # Wait for Keycloak (takes longest)
 echo -ne "  Keycloak (up to 90s): "
 for i in {1..18}; do
-  if curl -sf http://localhost:8080/health/ready > /dev/null 2>&1; then
+  # Keycloak serves health on its management port (9000), not 8080.
+  if curl -sf http://localhost:9000/health/ready > /dev/null 2>&1; then
     echo -e "${GREEN}ready${NC}"
     break
   fi

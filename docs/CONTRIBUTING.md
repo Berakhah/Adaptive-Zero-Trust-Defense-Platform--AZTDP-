@@ -40,7 +40,7 @@ services/                      # One subdirectory per microservice
   spring-app/                  # Sample protected service (Java)
   attack-sim/                  # Adversary simulation scripts
 infra/
-  postgres/                    # init.sql
+  postgres/                    # 04_roles.sql, 05_grants.sql (run by scripts/db/migrate.sh)
   keycloak/                    # Realm export
   redis/                       # redis.conf
   prometheus/                  # prometheus.yml

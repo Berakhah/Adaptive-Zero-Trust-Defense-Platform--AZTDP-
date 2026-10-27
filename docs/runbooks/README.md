@@ -5,19 +5,23 @@ Operational documentation for running, managing, and troubleshooting the Adaptiv
 ## Quick Navigation
 
 ### Getting Started
-- **[GETTING_STARTED.md](../../GETTING_STARTED.md)** — Start here! Overview, 5-minute quickstart, common tasks
-- **[QUICK_START_GUIDE.md](QUICK_START_GUIDE.md)** — Detailed 80+ page operational guide with all commands
+- **[QUICK_START_GUIDE.md](QUICK_START_GUIDE.md)** — The one setup guide: prerequisites, a Windows section, starting the dev stack, tokens, tests, troubleshooting
 
 ### Setup & Startup
 - **[Startup Script](../../scripts/startup.sh)** — Automated setup and platform startup
-- **[Validation Script](../../scripts/validate_platform.sh)** — Automated health checks
+- **[Validation Script](../../scripts/validate_platform.sh)** — Automated health checks (`validate_platform.ps1` on Windows)
 
-### Verification & Testing
-- **[PLATFORM_VERIFICATION_CHECKLIST.md](../../PLATFORM_VERIFICATION_CHECKLIST.md)** — 100-item verification checklist
+### Going to production
+- **[GO_LIVE_CHECKLIST.md](../GO_LIVE_CHECKLIST.md)** — Secrets, TLS, identity, exposure, backups, monitoring, sign-off
+- **[PRODUCTION_READINESS.md](../PRODUCTION_READINESS.md)** — Current status and open decisions
+- **[KNOWN_LIMITATIONS.md](../KNOWN_LIMITATIONS.md)** — What the platform does not do
 
 ### Operations & Deployment
-- **[OPERATIONS_MANUAL.md](OPERATIONS_MANUAL.md)** — Production deployment, scaling, HA, disaster recovery
+- **[OPERATIONS_MANUAL.md](OPERATIONS_MANUAL.md)** — Deployment, scaling, HA, disaster recovery
+- **[BACKUP_RESTORE.md](BACKUP_RESTORE.md)** — PostgreSQL backups and the tested restore procedure
+- **[AUDIT_RETENTION.md](AUDIT_RETENTION.md)** — Audit log partitioning and retention
 - **[INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md)** — Security incident handling playbook
+- **[PERFORMANCE_BASELINE.md](../PERFORMANCE_BASELINE.md)** — Measured load-test results and bottlenecks
 
 ## Service Commands
 
@@ -54,10 +58,9 @@ docker compose down -v
 
 ## Support Hierarchy
 
-1. **[GETTING_STARTED.md](../../GETTING_STARTED.md)** — Start here for overview and quick tasks
-2. **[QUICK_START_GUIDE.md](QUICK_START_GUIDE.md)** — Detailed operational guide (80+ pages)
-3. **[OPERATIONS_MANUAL.md](OPERATIONS_MANUAL.md)** — Production deployment and scaling
-4. **[INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md)** — Security incident handling
+1. **[QUICK_START_GUIDE.md](QUICK_START_GUIDE.md)** — Setup, commands and troubleshooting
+2. **[OPERATIONS_MANUAL.md](OPERATIONS_MANUAL.md)** — Production deployment and scaling
+3. **[INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md)** — Security incident handling
 
 ## Deployment Models
 
@@ -68,8 +71,8 @@ docker compose down -v
 ## Testing
 
 ```bash
-# Unit tests
-pytest
+# Unit tests (one pytest process per service)
+bash scripts/run_tests.sh
 
 # Integration tests (full stack)
 AZTDP_RUN_LIVE_TESTS=1 pytest services/attack-sim/

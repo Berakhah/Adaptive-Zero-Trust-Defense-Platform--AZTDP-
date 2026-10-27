@@ -2,8 +2,14 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 rule_files:
-  - /etc/prometheus/rules/*.yml
+  # *.rules.yml only: *.rules.test.yml are promtool test files, not rule groups.
+  - /etc/prometheus/rules/*.rules.yml
 
 scrape_configs:
   - job_name: gateway
@@ -28,7 +34,7 @@ scrape_configs:
 
   - job_name: django-app
     static_configs:
-      - targets: ["django-app:8080"]
+      - targets: ["django-app:8000"]
 
   - job_name: spring-app
     metrics_path: /actuator/prometheus
@@ -38,3 +44,7 @@ scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]

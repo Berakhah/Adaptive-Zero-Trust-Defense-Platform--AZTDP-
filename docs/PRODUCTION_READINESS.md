@@ -1,60 +1,107 @@
 # AZTDP Production-Readiness Tracker
 
-Each task references the workstream/ID from the principal-level audit (2026-05-03). Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` won't do
+Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` won't do
 
-## P0 — Deployment Blockers
-- [x] P0.1 Mount schema.sql in docker-compose
+The 2026-05-03 audit tracker (P0-P5) marked everything done. An analysis on 2026-10-19 found that several of those claims were false, and the work to fix them is in [the implementation plan](superpowers/plans/2026-10-19-aztdp-production-readiness.md) (Findings Register F-01 to F-20, Tasks 1-18). This file is the current, honest status. Related documents: [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md), [GO_LIVE_CHECKLIST.md](GO_LIVE_CHECKLIST.md), [PERFORMANCE_BASELINE.md](PERFORMANCE_BASELINE.md), [../CHANGELOG.md](../CHANGELOG.md).
+
+**Not ready for production yet.** Open blockers: both provisional SLOs are missed ([PERFORMANCE_BASELINE.md](PERFORMANCE_BASELINE.md)), the go-live checklist has not been executed, CI has not been rewritten (Task 16), and the owner decisions below are unanswered.
+
+## Plan progress
+
+| Task | Scope | Findings | Status |
+|---|---|---|---|
+| 1 | Green, isolated, per-service test runs | F-01, F-18 | [x] |
+| 2 | Repo hygiene, restored `.env.example` | F-02, F-03 | [x] |
+| 3 | Authenticate forensics; fix and shrink dashboard proxy | F-04, F-05 | [x] |
+| 4 | Network exposure, Redis auth, OPA isolation | F-09 | [x] |
+| 5 | Safe step-up (Redis-backed, rate-limited, no default secrets) | F-06 | [x] |
+| 6 | Production profile for identity, Django, demo tooling | F-10, F-11 | [x] |
+| 7 | Container hardening, Prometheus port mismatch | F-12, F-19 | [x] |
+| 8 | One migration path, per-service DB roles, append-only audit | F-08, F-14 | [x] |
+| 9 | Durable, correct token revocation | F-07 | [x] |
+| 10 | Audit telemetry reliability, tests for the two untested services | F-08, F-18 | [x] |
+| 11 | Signed anomaly-model artifacts | F-13 | [x] |
+| 12 | Alertmanager and availability alerts | F-15 | [x] |
+| 13 | Backups and tested restore | F-15 | [x] |
+| 14 | Resource limits, restart policy, load-test baseline | F-12 | [x] SLOs not met |
+| 15 | Documentation truth pass | F-20, F-03 | [x] written; quickstart not yet run end-to-end on a clean clone |
+| 16 | CI/CD rewrite (tests, security gates, release) | F-16, F-19 | [ ] |
+| 17 | Quarantine Kubernetes/Helm | F-20 | [ ] |
+| 18 | One SOC dashboard wired to real data | F-17, F-03 | [ ] blocked on Q2 |
+
+## Original audit items
+
+Items the 2026-10-19 analysis showed were falsely "done" were reopened, and are marked with what closed them.
+
+### P0 - Deployment blockers
+- [x] P0.1 Schema applied: now the one-shot `db-migrate` service runs `scripts/db/migrations/` (reopened by F-14; closed by Task 8)
 - [x] P0.2 Anomaly model persistent volume
-- [x] P0.3 Verify Spring Boot 4.0.6 / Java 25 build (confirmed in Maven Central metadata 2026-05-03)
+- [x] P0.3 Spring Boot 4.0.6 / Java 25 build verified (Maven Central metadata, 2026-05-03)
 
-## P1 — Security-Critical
-- [x] P1.1 Trusted-proxy IP/geo extraction (Django `client_ip.py` + Spring `ClientIpResolver.java`)
-- [x] P1.2 OPA policy ladder fix: low-risk allows all sensitivities, very_high_risk → revoke, + `authz_test.rego` (14 tests)
-- [x] P1.3 Internal service authentication (`X-Internal-Token` on all 6 services — gateway, risk-engine, anomaly-service, telemetry-ingest, django-app, spring-app; env var in docker-compose)
-- [x] P1.4 Remove dead `is_token_revoked` path (OPA rule removed, middleware field removed)
-- [x] P1.5 Step-up TOTP verification endpoint (`core/stepup.py`, `POST /v1/auth/step-up/verify`, X-Step-Up-Token header check in middleware)
+### P1 - Security-critical
+- [x] P1.1 Trusted-proxy IP/geo extraction (Django `client_ip.py`, Spring `ClientIpResolver.java`)
+- [x] P1.2 OPA policy ladder, `authz_test.rego`
+- [x] P1.3 Internal service authentication via `X-Internal-Token` (**reopened**: tests never sent the token and the suite was red, F-01; the dashboard proxy sent the wrong header, F-04; forensics had no auth, F-05. Closed by Tasks 1 and 3)
+- [x] P1.4 Dead `is_token_revoked` path removed
+- [x] P1.5 Step-up TOTP (**reopened**: per-process challenge store broken across workers, brute-forceable, shared default secret, F-06. Closed by Task 5)
 
-## P2 — Functional Correctness
-- [x] P2.1 Gateway revocation cold-start recovery (loads from `token_revocations` table via psycopg on startup)
-- [x] P2.2 Telemetry shutdown-safe executor (ThreadPoolExecutor + shutdown_executor in gateway and risk-engine)
-- [x] P2.3 Delete decision_log.py (source already removed; stale .pyc cleaned)
-- [x] P2.4 Surface silent revocation failures (middleware now logs error instead of silently returning)
+### P2 - Functional correctness
+- [x] P2.1 Gateway revocation cold-start recovery (**reopened**: revocations were not durable, F-07. Closed by Task 9)
+- [x] P2.2 Telemetry shutdown-safe executor
+- [x] P2.3 `decision_log.py` removed
+- [x] P2.4 Silent revocation failures surfaced
 
-## P3 — ML Retraining Loop
-- [x] P3.1 Persist feature vectors to `anomaly_baselines` (UPSERT on each score via `persist_baseline()`)
-- [x] P3.2 Scheduled retraining background job (`start_retrain_scheduler()` — 6-hour interval, min 1000 rows)
-- [x] P3.3 Manual retrain endpoint (`POST /v1/anomaly/retrain` with internal auth)
-- [x] P3.4 Model evaluation metrics (anomaly rate, p50/p95/p99, precision/recall on 20% holdout; Prometheus gauges `aztdp_model_score_p99`, `aztdp_model_holdout_precision`, etc.)
+### P3 - ML retraining loop
+- [x] P3.1 Feature vectors persisted to `anomaly_baselines`
+- [x] P3.2 Scheduled retraining (6 h, minimum 1000 rows)
+- [x] P3.3 Manual retrain endpoint `POST /v1/anomaly/retrain`
+- [x] P3.4 Model evaluation metrics
+- [x] P3.5 Model artifacts HMAC-verified before load (F-13, Task 11)
 
-## P4 — Operational Hardening (SOC 2)
-- [x] P4.1 Docker secrets migration (all plaintext credentials moved to `.env` / `${VAR}` references; `.env.example` template committed; `.env` and `secrets/` in `.gitignore`)
-- [x] P4.2 TLS reverse proxy (nginx service in docker-compose; `infra/nginx/nginx.conf`; self-signed cert script `infra/nginx/gen-certs.sh`; HTTP → HTTPS redirect; HSTS headers)
-- [x] P4.3 Django security settings (`ALLOWED_HOSTS` from explicit env — no wildcard fallback; `SECURE_SSL_REDIRECT`, `SESSION_COOKIE_SECURE`, `CSRF_COOKIE_SECURE`, `SECURE_HSTS_SECONDS=31536000`)
-- [x] P4.4 Audit log partitioning + retention (`scripts/db/migrations/V2__audit_partitioning.sql` — monthly range partitions; `aztdp_audit_maintenance()` procedure; `docs/runbooks/AUDIT_RETENTION.md` — 90-day hot / 7-year cold)
-- [x] P4.5 Prometheus alert rules (`infra/prometheus/rules/aztdp.rules.yml` — anomaly_flagged >5/min, policy_denied >10/min, eval_latency p99 >500ms, model stale >24h; wired into `prometheus.yml`)
-- [x] P4.6 Structured JSON logging (`json_logging.py` in all 5 FastAPI services; `python-json-logger==2.0.7` added to all requirements; standardized fields: timestamp, service, level, message)
+### P4 - Operational hardening (SOC 2)
+- [x] P4.1 Secrets in `.env` / `${VAR}` references (**reopened**: `.env.example` had been deleted, F-02. Restored in Task 2; production profile refuses to start with unset secrets, Task 6)
+- [x] P4.2 TLS reverse proxy (nginx). Certificate is still self-signed: replace before go-live
+- [x] P4.3 Django security settings
+- [x] P4.4 Audit log partitioning and retention (**reopened**: `V2__audit_partitioning.sql` was never applied, F-14. Closed by Task 8; the audit table is now append-only)
+- [x] P4.5 Prometheus alert rules (extended: availability, audit-drop and anomaly-fallback alerts, Alertmanager; Tasks 10, 12 and the anomaly metric)
+- [x] P4.6 Structured JSON logging
+- [x] P4.7 Backups with automated restore verification (Task 13)
+- [x] P4.8 Resource limits and restart policies (Task 14)
 
-## P5 — Test & CI Coverage
-- [x] P5.1 pyproject.toml at repo root (unified pytest config, asyncio_mode=auto, testpaths across all services)
-- [x] P5.2 OPA policy tests (`authz_test.rego` — 14 tests)
-- [x] P5.3 IP-spoof regression test (`tests/test_ip_spoof_regression.py` — 8 tests covering untrusted-source rejection and trusted-proxy acceptance)
-- [x] P5.4 Step-up E2E test (`tests/test_stepup_flow.py` — 12 tests covering full challenge → TOTP → token → verify flow including expiry and replay prevention)
-- [x] P5.5 Telemetry drain unit test (`services/gateway/tests/test_telemetry_drain.py` — 5 tests verifying in-flight events drain before shutdown and no loss under concurrency)
+### P5 - Test and CI coverage
+- [x] P5.1 Per-service pytest runs through `scripts/run_tests.sh` (the root `pytest` cannot collect: package names collide)
+- [x] P5.2 OPA policy tests
+- [x] P5.3 IP-spoof regression test
+- [x] P5.4 Step-up end-to-end test
+- [x] P5.5 Telemetry drain test
+- [ ] P5.6 CI runs OPA tests, frontend builds, SAST, dependency and image scanning, and a coverage gate (F-16, Task 16)
 
-## SOC 2 Type II Evidence Map
+## SOC 2 Type II evidence map
+
 | Control | Source of evidence |
 |---|---|
-| Audit log completeness | `audit_events` + retention runbook (P4.4) |
-| Access control | `X-Internal-Token` (P1.3) + OPA decision log |
-| Change management | Manual retrain endpoint (P3.3) + CI (P5) |
-| Encryption in transit | nginx TLS at ingress (P4.2) |
-| Monitoring | Alert rules (P4.5) + structured logs (P4.6) |
+| Audit log completeness | `audit_events` with retry/drop metric and `AuditTelemetryDropping` alert (Task 10); retention runbook [AUDIT_RETENTION.md](runbooks/AUDIT_RETENTION.md) |
+| Audit log immutability | Append-only `audit_events` and per-service DB roles (Task 8, `infra/postgres/04_roles.sql`, `05_grants.sql`) |
+| Access control | `X-Internal-Token` on every internal service incl. forensics (Task 3); OPA decisions; network exposure limited to ingress (`scripts/check_exposure.sh`, Task 4) |
+| Change management | Signed model artifacts and manual retrain endpoint (Tasks 11, P3.3); CI (Task 16, pending) |
+| Encryption in transit | nginx TLS at ingress (P4.2). Replace the self-signed certificate (see go-live checklist) |
+| Monitoring and alerting | Prometheus rules and Alertmanager (Task 12), `scripts/check_prometheus.sh`, structured logs (P4.6) |
+| Backup and recovery | Automated backups, tested restore, [BACKUP_RESTORE.md](runbooks/BACKUP_RESTORE.md) (Task 13). Restore drill sign-off is a go-live item |
+| Capacity and availability | Resource limits and restart policies (`scripts/check_compose_limits.sh`); baseline measured and **SLOs not met** ([PERFORMANCE_BASELINE.md](PERFORMANCE_BASELINE.md)) |
 
-## Open Questions
-- (none currently)
+## Open questions for the owner
 
-## Decisions Log
-- 2026-05-03: Target Docker Compose only (no K8s) — owner
-- 2026-05-03: Keep Spring Boot 4.0.6 + Java 25 pending build verification — owner (verified OK)
-- 2026-05-03: Implement full ML retraining loop in scope — owner
-- 2026-05-03: SOC 2 Type II in scope, no PCI/GDPR — owner
+- **Q1 Step-up:** keep self-hosted TOTP (needs enrollment UI and per-user secret provisioning) or delegate step-up to Keycloak (`acr_values`)? Work so far assumes "harden what exists".
+- **Q2 Dashboard:** which UI is the product, `services/dashboard` or `sentinel-command-main`? Task 18 assumes sentinel becomes primary and `services/dashboard` is removed once parity is verified.
+- **Q3 Release target:** is there a target host and container registry for releases? Task 16 assumes GHCR.
+- **Q4 Anomaly fail-open:** when the anomaly service is slow or down, should high-sensitivity requests fail closed instead of being scored without the ML signal? The fallback is now measured and alerted on, not changed.
+- **Q5 SLOs:** what request rate must the platform sustain? The provisional targets (p99 under 250 ms, errors under 0.1%) are met in no load-test run, and the anomaly service tops out near 29 req/s.
+
+## Decisions log
+
+- 2026-05-03: Target Docker Compose only (no K8s) - owner
+- 2026-05-03: Keep Spring Boot 4.0.6 + Java 25 pending build verification - owner (verified OK)
+- 2026-05-03: Implement full ML retraining loop in scope - owner
+- 2026-05-03: SOC 2 Type II in scope, no PCI/GDPR - owner
+- 2026-10-19: Production-readiness plan adopted; the 2026-05-03 "all done" status is superseded by this file
+- 2026-10-20: Anomaly fallback made observable (counter, logs, alert) with fail-open behavior unchanged, pending Q4

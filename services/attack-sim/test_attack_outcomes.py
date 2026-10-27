@@ -8,9 +8,13 @@ Run against a live stack:
 import os
 
 import pytest
-
-from utils import base_url, default_headers, get_access_token, request_json, sleep_between
-
+from utils import (
+    base_url,
+    default_headers,
+    get_access_token,
+    request_json,
+    sleep_between,
+)
 
 pytestmark = pytest.mark.skipif(
     not os.getenv("AZTDP_RUN_LIVE_TESTS"),

@@ -1,4 +1,11 @@
-from utils import base_url, default_headers, get_access_token, print_result, request_json, sleep_between
+from utils import (
+    base_url,
+    default_headers,
+    get_access_token,
+    print_result,
+    request_json,
+    sleep_between,
+)
 
 
 def main() -> None:

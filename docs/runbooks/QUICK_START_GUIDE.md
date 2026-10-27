@@ -19,60 +19,61 @@ Complete guide to running, using, and validating the Adaptive Zero-Trust Defense
 ## 1. Prerequisites
 
 ### System Requirements
-- **Docker & Docker Compose** (v3.8+)
-- **8 GB RAM** minimum (recommend 16 GB for comfortable testing)
-- **Bash/Zsh shell** (or PowerShell on Windows)
-- **curl** (for command-line testing)
-- **jq** (optional, for JSON parsing)
+- **Docker with Compose v2** (`docker compose version`; 2.24 or newer for the `COMPOSE_ENV_FILES` shortcut below)
+- **8 GB RAM** minimum for the container stack (16 GB recommended; the stack sets memory limits on every service)
+- **Bash** (Linux, macOS, WSL2 or Git Bash on Windows)
+- **curl**, and **jq** (optional, for JSON parsing)
 
-### Port Availability
-Ensure the following ports are available:
-- `8000, 8001, 8002, 8003, 8004` — AZTDP backend services
-- `8010, 8011` — Django & Spring test apps
-- `8080` — Keycloak (OIDC)
-- `8181` — OPA (policy engine)
-- `5432` — PostgreSQL
-- `6379` — Redis
-- `9090` — Prometheus
-- `3000` — Grafana
+### Two profiles
+- **Production profile** - `docker-compose.yml` alone, with a real `.env` (see `.env.example`). It publishes only the nginx ingress and refuses to start while any required secret is empty. Use [GO_LIVE_CHECKLIST.md](../GO_LIVE_CHECKLIST.md) for it.
+- **Dev profile** - `docker-compose.yml` plus `docker-compose.dev.yml` and the committed, public, dev-only values in `.env.dev`. It publishes service ports on `127.0.0.1` only, imports a Keycloak realm with seeded users, and turns DEBUG on. **Everything in this guide uses the dev profile.**
 
-### Platform Requirements
-- Docker installed: `docker --version`
-- Docker Compose installed: `docker compose version`
+### Dev host ports (all bound to 127.0.0.1)
+`8000-8004` AZTDP services, `8010`/`8011` Django and Spring sample apps, `8080`/`9000` Keycloak, `8181` OPA, `5432` PostgreSQL, `6379` Redis, `9090` Prometheus, `9093` Alertmanager, `3000` Grafana, `8090` attack simulator API, `8099` SOC dashboard, plus nginx `80`/`443`. Make sure none of these are in use.
+
+### 1.1 Windows notes
+- Install **Docker Desktop** with the **WSL2 backend** (`wsl --install` from an administrator PowerShell, then restart). Start Docker Desktop and wait until `docker info` works before running anything; "failed to connect to the docker API ... dockerDesktopLinuxEngine" means it is not running yet.
+- Run the shell scripts (`scripts/*.sh`) from **WSL2 or Git Bash**. Scripts and container entrypoints must keep **LF** line endings; the repository's `.gitattributes` enforces this on checkout. If you edit in Notepad, save as UTF-8 and keep LF (VS Code: click `CRLF` in the status bar and choose `LF`).
+- With native Windows Docker the compose environment shortcut in section 2.2 uses a `;` separator. In PowerShell: `$env:COMPOSE_FILE = "docker-compose.yml;docker-compose.dev.yml"` and `$env:COMPOSE_ENV_FILES = ".env.dev"`. Inside WSL2 use the `:` form.
+- Get a token in PowerShell:
+  ```powershell
+  $r = Invoke-RestMethod -Method Post -Uri http://localhost:8080/realms/aztdp/protocol/openid-connect/token `
+    -Body @{ grant_type="password"; client_id="aztdp-client"; client_secret="aztdp-secret"; username="user1"; password="password" }
+  $TOKEN = $r.access_token
+  ```
+- Validate the stack without bash: `powershell -ExecutionPolicy Bypass -File scripts/validate_platform.ps1`. If scripts are blocked: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+- Port already in use (for example 8080): `netstat -ano | findstr :8080`, then stop that process or free the port.
+- Keep the project path short and free of spaces where you can; quote it in PowerShell when it has spaces.
 
 ---
 
 ## 2. Initial Setup
 
-### 2.1 Clone or Extract the Project
+### 2.1 Get the project
 
 ```bash
-cd /path/to/AZTDP
+git clone <repo-url> aztdp && cd aztdp
 ```
 
-### 2.2 Create Environment File
+### 2.2 Choose the compose files
+
+The base file needs its secrets even for `docker compose ps` or `logs`, so tell Compose once per shell which files to use:
 
 ```bash
-cp .env.example .env
+# Linux, macOS, WSL2:
+export COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml
+# Native Windows Docker (Git Bash or PowerShell) uses ";" as the separator instead:
+#   export COMPOSE_FILE='docker-compose.yml;docker-compose.dev.yml'
+export COMPOSE_ENV_FILES=.env.dev
 ```
 
-Edit `.env` with your values:
+After that, plain `docker compose ...` commands in this guide work against the dev stack. (If you prefer not to export them, add `--env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml` to every command.)
+
+To override a dev value or add your own, create a `.env` and list both files: `COMPOSE_ENV_FILES=.env.dev,.env` (later wins). For the production profile, copy `.env.example` to `.env`, fill every value with `openssl rand -hex 32`-style secrets and do **not** use `.env.dev`.
+
+### 2.3 Verify project structure
 
 ```bash
-# Database
-POSTGRES_PASSWORD=aztdp_password_here
-
-# Keycloak
-KEYCLOAK_ADMIN_PASSWORD=keycloak_admin_here
-
-# Optional: Set per-service fail-open behavior
-AZTDP_FAIL_OPEN=false  # Change to 'true' to allow requests on backend errors
-```
-
-### 2.3 Verify Project Structure
-
-```bash
-# Should show the following key directories:
 ls -d services docs policies infra scripts
 # Expected: services  docs  policies  infra  scripts
 ```
@@ -84,25 +85,17 @@ ls -d services docs policies infra scripts
 ### 3.1 Build and Start All Services (First Time)
 
 ```bash
-# Build all Docker images and start services
 docker compose up -d --build
-
-# This will start:
-# - PostgreSQL (data persistence)
-# - Redis (session & rate-limit state)
-# - Keycloak (OIDC identity)
-# - OPA (policy engine)
-# - 5 AZTDP backend services
-# - 2 test apps (Django & Spring)
-# - Prometheus & Grafana (monitoring)
+# Add `--profile sim` to also start the attack simulator.
 ```
+
+This starts PostgreSQL (plus the one-shot `db-migrate` job), Redis, Keycloak, OPA, the AZTDP backend services (gateway, risk-engine, anomaly-service, telemetry-ingest, forensics), the Django and Spring sample apps, nginx, Prometheus, Alertmanager and Grafana.
 
 ### 3.2 Wait for Services to Start
 
-Keycloak takes ~60 seconds to initialize the realm. Wait for it:
+Keycloak takes about 60 seconds to import the realm:
 
 ```bash
-# Poll until Keycloak is ready
 until curl -sf http://localhost:8080/health/ready > /dev/null; do
   echo "Waiting for Keycloak..."
   sleep 5
@@ -110,7 +103,7 @@ done
 echo "Keycloak ready!"
 ```
 
-Or just wait a moment and move to health checks.
+The anomaly service trains an initial model on first start and can report unhealthy for a minute or two.
 
 ### 3.3 Stop the Platform
 
@@ -437,21 +430,17 @@ pip install pytest==8.2.2 pytest-django httpx
 # Install all service dependencies
 for req in services/*/requirements.txt; do pip install -r "$req"; done
 
-# Run all tests
-pytest
+# Run every service's tests (one pytest process per service)
+bash scripts/run_tests.sh
 
-# Run tests for a specific service
-pytest services/risk-engine/tests/
-pytest services/gateway/tests/
-pytest services/anomaly-service/tests/
+# Run only some services
+bash scripts/run_tests.sh gateway risk-engine
 
-# Run with verbose output
-pytest -v
-
-# Run with coverage
-pip install pytest-cov
-pytest --cov=services --cov-report=html
+# Run one service by hand, from its own directory
+cd services/risk-engine && python -m pytest -v
 ```
+
+Do not run a bare `pytest` from the repository root: every service has a `tests` package of the same name, so a single collection run fails. `scripts/run_tests.sh` exists for that reason.
 
 ### 8.2 Integration Tests (Against Running Stack)
 

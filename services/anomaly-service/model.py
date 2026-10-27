@@ -1,4 +1,10 @@
+import hashlib
+import hmac
+import io
+import logging
 import os
+import re
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -10,6 +16,47 @@ from sklearn.ensemble import IsolationForest
 
 from . import config
 
+logger = logging.getLogger("aztdp.anomaly.model")
+
+_VERSION_RE = re.compile(r"v[0-9A-Za-z._-]{1,64}")  # used with fullmatch
+
+
+def is_valid_version(version) -> bool:
+    """True only for strings safe to embed in an artifact filename."""
+    return isinstance(version, str) and _VERSION_RE.fullmatch(version) is not None
+
+
+def _sign(data: bytes) -> str:
+    return hmac.new(config.MODEL_HMAC_KEY.encode(), data, hashlib.sha256).hexdigest()
+
+
+_SIG_RE = re.compile(rb"[0-9A-Fa-f]{64}")
+
+
+def _signature_matches(data: bytes, sig_bytes: bytes) -> bool:
+    """Constant-time check of a raw .sig file against the HMAC of data."""
+    sig_bytes = sig_bytes.strip()
+    if _SIG_RE.fullmatch(sig_bytes) is None:
+        return False
+    expected = hmac.new(config.MODEL_HMAC_KEY.encode(), data, hashlib.sha256).digest()
+    return hmac.compare_digest(bytes.fromhex(sig_bytes.decode("ascii")), expected)
+
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    """Write to a temp file in the same dir, fsync, then rename into place."""
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 class AnomalyModel:
     def __init__(self) -> None:
@@ -42,10 +89,22 @@ class AnomalyModel:
             self._score_max = float(np.max(raw_scores))
 
     def save(self) -> Path:
+        """Persist the model and its HMAC signature.
+
+        The model is renamed into place first and the signature LAST: a reader
+        can never see a signed-looking model without its signature, and a
+        signature that does not match the bytes is never trusted by load().
+        """
         if not self.is_loaded:
             raise RuntimeError("model not fitted")
-        Path(config.MODEL_DIR).mkdir(parents=True, exist_ok=True)
-        path = Path(config.MODEL_DIR) / f"isolation_forest_{self._version}.pkl"
+        if not is_valid_version(self._version):
+            raise ValueError(f"invalid model version: {self._version!r}")
+        if not config.MODEL_HMAC_KEY:
+            raise RuntimeError("AZTDP_MODEL_HMAC_KEY is not set; refusing to save unsigned model")
+        model_dir = Path(config.MODEL_DIR)
+        model_dir.mkdir(parents=True, exist_ok=True)
+        path = model_dir / f"isolation_forest_{self._version}.pkl"
+        buf = io.BytesIO()
         joblib.dump(
             {
                 "estimator": self._estimator,
@@ -53,20 +112,63 @@ class AnomalyModel:
                 "score_min": self._score_min,
                 "score_max": self._score_max,
             },
-            path,
+            buf,
         )
+        data = buf.getvalue()
+        _atomic_write(path, data)
+        _atomic_write(path.with_name(path.name + ".sig"), _sign(data).encode())
         return path
 
     def load(self, version: str) -> bool:
-        path = Path(config.MODEL_DIR) / f"isolation_forest_{version}.pkl"
-        if not path.exists():
+        """Load a signed model. Never unpickles bytes whose HMAC does not verify."""
+        if not is_valid_version(version):
+            logger.error("invalid model version rejected: %r", version)
             return False
-        bundle = joblib.load(path)
+        if not config.MODEL_HMAC_KEY:
+            logger.error("model_signature_invalid version=%s reason=no_hmac_key", version)
+            return False
+        path = Path(config.MODEL_DIR) / f"isolation_forest_{version}.pkl"
+        sig_path = path.with_name(path.name + ".sig")
+        try:
+            data = path.read_bytes()
+        except FileNotFoundError:
+            return False
+        except (OSError, ValueError) as exc:
+            logger.error("model_signature_invalid version=%s reason=model_unreadable err=%s",
+                         version, type(exc).__name__)
+            return False
+        try:
+            sig_bytes = sig_path.read_bytes()
+        except FileNotFoundError:
+            logger.error("model_signature_invalid version=%s reason=missing_signature", version)
+            return False
+        except (OSError, ValueError) as exc:
+            logger.error("model_signature_invalid version=%s reason=signature_unreadable err=%s",
+                         version, type(exc).__name__)
+            return False
+        try:
+            verified = _signature_matches(data, sig_bytes)
+        except (OSError, ValueError, TypeError) as exc:
+            logger.error("model_signature_invalid version=%s reason=verify_error err=%s",
+                         version, type(exc).__name__)
+            return False
+        if not verified:
+            logger.error("model_signature_invalid version=%s reason=mismatch", version)
+            return False
+        try:
+            bundle = joblib.load(io.BytesIO(data))  # only after verification
+            estimator = bundle["estimator"]
+            loaded_version = bundle["version"]
+            score_min = float(bundle["score_min"])
+            score_max = float(bundle["score_max"])
+        except Exception:
+            logger.exception("model artifact unreadable version=%s", version)
+            return False
         with self._lock:
-            self._estimator = bundle["estimator"]
-            self._version = bundle["version"]
-            self._score_min = float(bundle["score_min"])
-            self._score_max = float(bundle["score_max"])
+            self._estimator = estimator
+            self._version = loaded_version
+            self._score_min = score_min
+            self._score_max = score_max
         return True
 
     def score(self, X: np.ndarray) -> Tuple[float, float]:
@@ -96,9 +198,12 @@ def start_hot_reload(model: AnomalyModel, redis_client, interval: int = None) ->
                 if redis_client is not None:
                     target = redis_client.get(config.MODEL_VERSION_KEY)
                     if target and target != model.version:
-                        model.load(target)
+                        if not is_valid_version(target):
+                            logger.error("invalid model version in redis ignored: %r", target)
+                        elif not model.load(target):
+                            logger.error("model hot reload failed version=%s", target)
             except Exception:
-                pass
+                logger.exception("model hot reload error")
             time.sleep(interval)
 
     thread = threading.Thread(target=_loop, name="anomaly-model-reload", daemon=True)
