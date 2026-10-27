@@ -11,13 +11,32 @@ permissions:
   contents: write   # create the GitHub Release
   packages: write   # push to GHCR
   id-token: write   # keyless cosign signing
+  actions: read     # look up the CI result for the tagged commit
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
+  # Never publish a build that CI has not passed: the tagged commit must have a
+  # successful run of the CI workflow (tag a commit that already merged to main).
+  gate:
+    name: CI passed on this commit
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          n="$(gh run list --repo "${{ github.repository }}" --workflow ci.yml \
+                --commit "${{ github.sha }}" --status success --json databaseId \
+                --jq 'length')"
+          if [ "${n:-0}" -lt 1 ]; then
+            echo "::error::No successful CI run for ${{ github.sha }}. Merge via a green PR before tagging."
+            exit 1
+          fi
+
   images:
     name: Image (${{ matrix.service }})
+    needs: gate
     runs-on: ubuntu-latest
     strategy:
       fail-fast: true

@@ -165,6 +165,9 @@ jobs:
       COMPOSE_PROFILES: sim
     steps:
       - uses: actions/checkout@v4
+      # nginx mounts infra/nginx/certs (gitignored); without a cert it crash-loops.
+      - name: Generate the self-signed ingress certificate
+        run: bash infra/nginx/gen-certs.sh
       - run: docker compose up -d --build
       - name: Wait for the stack
         run: |
@@ -181,6 +184,24 @@ jobs:
           docker compose ps
           docker compose logs --tail=100
           exit 1
+      # Through the TLS ingress: metrics stay internal and the auth allowlists are
+      # exact-match (a path that merely starts with /health still needs a token).
+      - name: Ingress smoke checks
+        run: |
+          expect() {  # expect <status> <url>
+            got=""
+            for _ in $(seq 1 24); do
+              got="$(curl -sk -o /dev/null -w '%{http_code}' "$2" || true)"
+              [ "$got" = "$1" ] && return 0
+              sleep 5
+            done
+            echo "FAIL $2: expected $1, got $got"; docker compose logs --tail=50 nginx; exit 1
+          }
+          expect 404 https://localhost/metrics
+          expect 404 https://localhost:8443/actuator/prometheus
+          expect 401 https://localhost/healthz
+          expect 401 https://localhost/v1/payments/1
+          expect 200 https://localhost/health
       - name: Database roles and append-only audit
         run: bash scripts/db/tests/test_roles.sh
       # Dev-mode Keycloak derives the token issuer from the request host, and Django
