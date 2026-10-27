@@ -7,6 +7,30 @@ name = "aztdp"
 version = "0.1.0"
 requires-python = ">=3.11"
 
+# ── Lint (CI: ruff check services/) ───────────────────────────────────────────
+[tool.ruff]
+extend-exclude = ["services/gateway;C"]  # stray directory created by a Windows path typo
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "S"]
+ignore = ["E501"]  # line length is not enforced
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI declares parameters through call defaults; they are not mutable-default bugs.
+extend-immutable-calls = ["fastapi.Query", "fastapi.Depends"]
+
+[tool.ruff.lint.per-file-ignores]
+# Logging is configured before the other imports so that import-time messages are JSON.
+"services/gateway/app.py" = ["E402"]
+"services/risk-engine/app.py" = ["E402"]
+# These hold the *names* of env vars / header / key prefixes, not secrets.
+"**/internal_auth.py" = ["S105"]
+"services/anomaly-service/config.py" = ["S105"]
+# Tests use fixed fake tokens, assert, and run subprocesses on purpose.
+"**/tests/**" = ["S101", "S105", "S106", "S603", "S607", "S608"]
+"**/test_*.py" = ["S101", "S105", "S106", "S603", "S607", "S608"]
+"**/conftest.py" = ["S101", "S105", "S106"]
+
 # ── Coverage ──────────────────────────────────────────────────────────────────
 [tool.coverage.run]
 source = [

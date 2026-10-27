@@ -3,7 +3,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from anomaly_service import config
 from anomaly_service.feature_engineering import synthetic_baseline
 from anomaly_service.model import AnomalyModel

@@ -2,10 +2,10 @@ import asyncio
 import json
 import os
 import time
+
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-
 from internal_auth import require_internal_token
 
 app = FastAPI(title="aztdp-attack-sim", version="1.0.0")

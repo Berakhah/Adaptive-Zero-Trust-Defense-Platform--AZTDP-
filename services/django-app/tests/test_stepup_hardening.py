@@ -69,6 +69,7 @@ def test_challenge_jti_hash_flows_into_token():
 
 def _post(rf, body, ip="203.0.113.9"):
     import json
+
     from core.views import step_up_verify
     req = rf.post("/v1/auth/step-up/verify", data=json.dumps(body),
                   content_type="application/json", REMOTE_ADDR=ip)
@@ -136,6 +137,7 @@ def test_ip_key_without_ttl_does_not_lock_forever(rf):
 
 def test_spoofed_headers_ignored_when_not_from_trusted_proxy(rf):
     import json
+
     from core.views import step_up_verify
     for i in range(3):
         req = rf.post("/v1/auth/step-up/verify",

@@ -19,8 +19,6 @@ def configure(service: str) -> None:
     root.addHandler(handler)
     root.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
 
-    logging.LoggerAdapter  # touch to avoid unused-import warnings
-
     # Inject service name into every record
     old_factory = logging.getLogRecordFactory()
 

@@ -4,8 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from gateway.revocation_store import RevocationStore, RevocationPersistError
-
+from gateway.revocation_store import RevocationPersistError, RevocationStore
 
 # --- Brief-mandated tests -------------------------------------------------
 

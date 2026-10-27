@@ -5,13 +5,10 @@ Verifies that in-flight telemetry events are not silently dropped on shutdown:
 - The executor refuses new submissions after shutdown.
 """
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
-from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -53,11 +50,9 @@ class TestTelemetryDrain:
 
     def test_emit_async_drops_quietly_after_shutdown(self, monkeypatch):
         """emit_async must not raise after the executor is shut down."""
-        import os
         monkeypatch.setenv("AZTDP_TELEMETRY_URL", "http://fake-telemetry:9999")
         monkeypatch.setenv("AZTDP_INTERNAL_TOKEN", "test-token")
 
-        import importlib
         import sys
 
         # Reload to get a fresh module-level executor
@@ -66,7 +61,9 @@ class TestTelemetryDrain:
         if "gateway.config" in sys.modules:
             del sys.modules["gateway.config"]
 
-        import gateway.config as gconfig
+        # Side-effect import: re-binds the `gateway.config` package attribute so that
+        # gateway.telemetry's `from . import config` sees the env vars set above.
+        import gateway.config as gconfig  # noqa: F401
         import gateway.telemetry as tel
 
         # Shut the executor down manually

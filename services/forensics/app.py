@@ -9,8 +9,8 @@ from prometheus_client import CONTENT_TYPE_LATEST
 from . import config, metrics
 from .db import close_pool, get_pool
 from .internal_auth import require_internal_token
-
 from .json_logging import configure as _configure_logging
+
 _configure_logging("forensics")
 logger = logging.getLogger("aztdp.forensics")
 
@@ -37,8 +37,8 @@ def health() -> Dict[str, str]:
     try:
         with get_pool().connection() as conn:
             conn.execute("SELECT 1")
-    except Exception:
-        raise HTTPException(status_code=503, detail="db_unavailable")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="db_unavailable") from exc
     return {"status": "ok"}
 
 
@@ -86,6 +86,7 @@ def list_events(
             clauses.append("occurred_at <= %s::timestamptz")
             params.append(until)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        # Only fixed clause strings are interpolated; every value is a bound %s parameter.
         sql = f"""
             SELECT event_id, event_type, service, request_id, session_id,
                    user_id, token_jti_hash, ip, geo, payload, occurred_at
@@ -93,7 +94,7 @@ def list_events(
             {where}
             ORDER BY occurred_at DESC
             LIMIT %s OFFSET %s
-        """
+        """  # noqa: S608  # nosec B608
         params.extend([limit, offset])
         with get_pool().connection() as conn:
             rows = list(conn.execute(sql, params).fetchall())

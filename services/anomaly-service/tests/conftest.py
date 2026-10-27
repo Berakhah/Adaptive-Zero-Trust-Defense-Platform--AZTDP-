@@ -1,5 +1,4 @@
 import pytest
-
 from anomaly_service import config
 
 TEST_HMAC_KEY = "test-model-hmac-key-" + "k" * 24

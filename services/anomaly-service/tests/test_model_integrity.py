@@ -2,7 +2,6 @@ import logging
 
 import numpy as np
 import pytest
-
 from anomaly_service import config
 from anomaly_service.feature_engineering import FEATURE_ORDER
 from anomaly_service.model import AnomalyModel, start_hot_reload
@@ -168,7 +167,8 @@ def test_overlong_version_rejected(fitted_model):
 
 
 def test_correctly_signed_corrupt_bundle_returns_false(fitted_model, tmp_path):
-    import hmac, hashlib
+    import hashlib
+    import hmac
 
     p = fitted_model.save()
     data = b"not a joblib payload"

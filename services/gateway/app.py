@@ -4,6 +4,7 @@ from typing import Any, Dict, Literal, Optional
 from fastapi import Depends, FastAPI, HTTPException, Response
 
 from .json_logging import configure as _configure_logging
+
 _configure_logging("gateway")
 from prometheus_client import CONTENT_TYPE_LATEST
 from pydantic import BaseModel
@@ -66,12 +67,12 @@ def policy_decision(request: DecisionRequest) -> Dict[str, Any]:
 
     try:
         opa_response = evaluate({"input": request.input})
-    except OpaClientError:
+    except OpaClientError as exc:
         if config.FAIL_OPEN:
             decision = {"decision": "allow", "reason": {"rule": "fail_open"}}
             _emit(request_id, decision, request.input, token_hash)
             return {"decision": decision}
-        raise HTTPException(status_code=503, detail="policy_unavailable")
+        raise HTTPException(status_code=503, detail="policy_unavailable") from exc
 
     result = opa_response.get("result", opa_response)
     if isinstance(result, dict) and "decision" in result:
@@ -98,9 +99,9 @@ def revoke_token(request: RevokeRequest) -> Dict[str, Any]:
                 reason=request.reason,
                 source=request.source,
             )
-        except RevocationPersistError:
+        except RevocationPersistError as exc:
             # Fail closed: the caller must treat the revocation as failed and deny.
-            raise HTTPException(status_code=503, detail="revocation_not_persisted")
+            raise HTTPException(status_code=503, detail="revocation_not_persisted") from exc
         metrics.REVOCATIONS.inc()
         payload: Dict[str, Any] = {"reason": request.reason, "source": request.source}
         if request.expires_at is not None:

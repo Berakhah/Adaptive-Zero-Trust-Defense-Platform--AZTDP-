@@ -1,7 +1,5 @@
 import time
 
-import pytest
-
 from core.stepup import (
     create_challenge,
     current_totp_for_tests,

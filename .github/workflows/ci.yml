@@ -6,130 +6,187 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  PYTHON_VERSION: "3.12"
-  JAVA_VERSION: "25"
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
 
-  lint-python:
-    name: Lint Python
+  lint:
+    name: Lint and static analysis
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - run: pip install ruff==0.5.0
-      - run: ruff check services/ --select=E,F,W,I --ignore=E501
+          python-version: "3.12"
+      # Rule selection and per-file exceptions live in pyproject.toml ([tool.ruff]).
+      - run: pip install ruff==0.17.1 bandit==1.9.4
+      - run: ruff check services/
+      - run: bandit -r services -x '*/tests/*' -ll
+      - run: bash scripts/lint_dockerfiles.sh
 
-  test-python:
-    name: Test Python
+  python-tests:
+    name: Tests (${{ matrix.service }})
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_DB: aztdp
-          POSTGRES_USER: aztdp
-          POSTGRES_PASSWORD: aztdp
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U aztdp"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-      redis:
-        image: redis:7.2-alpine
-        ports: ["6379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
+    strategy:
+      fail-fast: false
+      matrix:
+        # min_cov is a ratchet: just under the coverage measured when the gate was
+        # added (non-test code only). Raise it when coverage rises; never lower it.
+        include:
+          - {service: gateway, min_cov: 85}
+          - {service: risk-engine, min_cov: 85}
+          - {service: anomaly-service, min_cov: 60}
+          - {service: telemetry-ingest, min_cov: 75}
+          - {service: forensics, min_cov: 60}
+          - {service: django-app, min_cov: 75}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install deps
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/${{ matrix.service }}/requirements.txt
+      - name: Install
         run: |
-          python -m pip install --upgrade pip
-          pip install pytest==8.2.2 pytest-django==4.8.0 httpx
-          for req in services/*/requirements.txt; do
-            pip install -r "$req"
-          done
-      - name: Run pytest
+          pip install -r services/${{ matrix.service }}/requirements.txt \
+            pytest==8.2.2 pytest-cov pytest-django==4.8.0 httpx fakeredis
+      # One pytest process per service: the `tests` package name collides across
+      # services, so a single root invocation cannot collect them (see run_tests.sh).
+      - name: Test with coverage gate
+        working-directory: services/${{ matrix.service }}
         env:
-          AZTDP_REDIS_URL: redis://localhost:6379/0
-          AZTDP_DB_HOST: localhost
-          AZTDP_SECRET_KEY: ci-secret
-        run: pytest -ra
+          AZTDP_INTERNAL_TOKEN: ci
+          AZTDP_SECRET_KEY: ci-not-used
+          AZTDP_DEBUG: "true"
+        run: |
+          python -m pytest -q --rootdir=. -p no:cacheprovider --cov=.
+          python -m coverage report \
+            --omit='*/tests/*,*/conftest.py,*/test_*,*/migrations/*' \
+            --fail-under=${{ matrix.min_cov }}
 
-  test-java:
-    name: Test Java
+  opa-tests:
+    name: OPA policy tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: open-policy-agent/setup-opa@v2
+        with:
+          version: "0.65.0"
+      - run: opa test policies -v
+      - run: opa check --strict policies
+
+  java:
+    name: Java (spring-app)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version: "25"
           cache: maven
-      - name: Run mvn test
-        working-directory: services/spring-app
-        run: mvn -B test
+      - run: mvn -B -f services/spring-app/pom.xml verify
 
-  build-images:
-    name: Build Docker Images
+  frontend:
+    name: Frontend (sentinel-command-main)
     runs-on: ubuntu-latest
-    needs: [lint-python, test-python, test-java]
-    strategy:
-      matrix:
-        service:
-          - gateway
-          - risk-engine
-          - anomaly-service
-          - telemetry-ingest
-          - forensics
-          - django-app
-          - spring-app
+    # Only the app with a lockfile. services/dashboard has none and is slated for
+    # removal (plan Task 18 / open question Q2); add it back here if it stays.
+    defaults:
+      run:
+        working-directory: sentinel-command-main
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Build ${{ matrix.service }}
-        uses: docker/build-push-action@v5
+      - uses: actions/setup-node@v4
         with:
-          context: ./services/${{ matrix.service }}
-          push: false
-          tags: aztdp/${{ matrix.service }}:ci-${{ github.sha }}
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,scope=${{ matrix.service }},mode=max
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: sentinel-command-main/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm run lint --if-present
+      - run: npm test --if-present
 
-  integration-test:
-    name: Integration (compose + attack sim)
+  supply-chain:
+    name: Secrets and dependency scanning
     runs-on: ubuntu-latest
-    needs: build-images
     steps:
       - uses: actions/checkout@v4
-      - name: Bring up stack
-        run: docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml --profile sim up -d --build
-      - name: Wait for services
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: pip-audit
         run: |
-          for i in {1..60}; do
+          pip install pip-audit
+          for r in services/*/requirements.txt; do
+            echo "== $r"
+            pip-audit -r "$r" --strict
+          done
+      - name: npm audit
+        working-directory: sentinel-command-main
+        run: npm audit --omit=dev --audit-level=high
+      - uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+
+  config-checks:
+    name: Compose, Prometheus and exposure checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The production-profile compose file refuses to start without every secret.
+      - run: bash scripts/ci_env.sh
+      - run: bash scripts/check_exposure.sh
+      - run: bash scripts/check_compose_limits.sh
+      - run: bash scripts/check_prometheus.sh
+
+  integration:
+    name: Integration (compose + attack sim)
+    needs: [lint, python-tests, opa-tests, java, frontend, config-checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Dev profile: committed, public, dev-only values in .env.dev (not secrets).
+      COMPOSE_FILE: docker-compose.yml:docker-compose.dev.yml
+      COMPOSE_ENV_FILES: .env.dev
+      COMPOSE_PROFILES: sim
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose up -d --build
+      - name: Wait for the stack
+        run: |
+          for _ in $(seq 1 90); do
             if curl -sf http://localhost:8000/health \
                && curl -sf http://localhost:8001/health \
-               && curl -sf http://localhost:8002/health; then
+               && curl -sf http://localhost:8002/health \
+               && curl -sf http://localhost:8080/health/ready; then
               echo "stack ready"
               exit 0
             fi
             sleep 5
           done
-          docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml --profile sim logs
+          docker compose ps
+          docker compose logs --tail=100
           exit 1
-      - name: Run attack sim tests
+      - name: Database roles and append-only audit
+        run: bash scripts/db/tests/test_roles.sh
+      - name: Attack-sim live tests
         env:
           AZTDP_RUN_LIVE_TESTS: "1"
+          # Public dev-realm values from docker-compose.dev.yml / aztdp-realm.dev.json.
           AZTDP_BASE_URL: http://localhost:8010
           AZTDP_USERNAME: user1
           AZTDP_PASSWORD: password
@@ -139,9 +196,7 @@ jobs:
         run: |
           pip install pytest==8.2.2 requests
           pytest services/attack-sim/test_attack_outcomes.py -ra
-      - name: Dump logs on failure
-        if: failure()
-        run: docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml --profile sim logs --tail=200
-      - name: Tear down
-        if: always()
-        run: docker compose --env-file .env.dev -f docker-compose.yml -f docker-compose.dev.yml --profile sim down -v
+      - if: failure()
+        run: docker compose ps && docker compose logs --tail=200
+      - if: always()
+        run: docker compose down -v

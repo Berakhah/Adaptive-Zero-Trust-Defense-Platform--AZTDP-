@@ -1,6 +1,9 @@
 import numpy as np
-
-from anomaly_service.feature_engineering import FEATURE_ORDER, build_feature_vector, synthetic_baseline
+from anomaly_service.feature_engineering import (
+    FEATURE_ORDER,
+    build_feature_vector,
+    synthetic_baseline,
+)
 
 
 def test_feature_order_is_eleven():

@@ -2,9 +2,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-
 from risk_engine import app as app_module
-
 
 client = TestClient(app_module.app)
 

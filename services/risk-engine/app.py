@@ -4,6 +4,7 @@ from typing import Any, Dict
 from fastapi import Depends, FastAPI, HTTPException, Response
 
 from .json_logging import configure as _configure_logging
+
 _configure_logging("risk-engine")
 from prometheus_client import CONTENT_TYPE_LATEST
 from pydantic import BaseModel

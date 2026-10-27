@@ -7,9 +7,8 @@ os.environ["AZTDP_INTERNAL_TOKEN"] = "sim-test-token"
 os.environ["AZTDP_SIM_ORIGINS"] = "https://soc.example"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from fastapi.testclient import TestClient  # noqa: E402
-
 import api  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
 client = TestClient(api.app)
 

@@ -1,4 +1,10 @@
-from utils import base_url, default_headers, get_access_token, print_result, request_json
+from utils import (
+    base_url,
+    default_headers,
+    get_access_token,
+    print_result,
+    request_json,
+)
 
 
 def main() -> None:
