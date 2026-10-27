@@ -1,6 +1,8 @@
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from gateway import app as app_module
 
@@ -57,15 +59,13 @@ def test_protected_route_rejects_missing_token():
     assert r.status_code == 401
 
 
-import pytest as _pytest
-from pydantic import ValidationError as _ValidationError
 
 
-@_pytest.mark.parametrize("bad", [-1, 99_999_999_999_999, 4_102_444_801])
+@pytest.mark.parametrize("bad", [-1, 99_999_999_999_999, 4_102_444_801])
 def test_revoke_request_rejects_out_of_range_expires_at(bad):
     from gateway.app import RevokeRequest
 
-    with _pytest.raises(_ValidationError):
+    with pytest.raises(ValidationError):
         RevokeRequest(token_jti_hash="h", reason="r", source="admin", expires_at=bad)
 
 
