@@ -6,6 +6,7 @@ Work top to bottom on the release candidate. Every box needs a name and a date n
 
 - [ ] Copy `.env.example` to `.env` and fill **every** value. The base compose file refuses to start while any required secret is empty.
 - [ ] Generate each secret independently, for example `openssl rand -hex 32`. Do not reuse one value for several keys, and do not copy anything from `.env.dev` (its values are public).
+- [ ] `AZTDP_STEPUP_SIGNING_KEY` and `AZTDP_TOTP_MASTER_SECRET` are set. Django now refuses to boot without them (the check runs when the app loads), as does forensics without `AZTDP_INTERNAL_TOKEN`; any `manage.py` command run in the production image needs them too.
 - [ ] Keep the URL-encoded Redis password in step with the plain one (`REDIS_PASSWORD_URLENCODED`).
 - [ ] Store `.env` outside the repository with owner-only permissions. Confirm `git status` shows no `.env` and no `secrets/` directory.
 - [ ] Record a rotation owner and interval for the internal token, database role passwords, Redis password, Grafana admin, Keycloak admin and the model-signing key. Rotating requires restarting the services that read them.
@@ -26,6 +27,8 @@ Work top to bottom on the release candidate. Every box needs a name and a date n
 
 - [ ] `bash scripts/check_exposure.sh` passes: only the nginx ingress ports are published.
 - [ ] The attack simulator is not running (it exists only behind the dev `sim` profile).
+- [ ] `/metrics` and `/actuator/prometheus` return 404 through the ingress: `curl -ks -o /dev/null -w '%{http_code}' https://<host>/metrics`.
+- [ ] `AZTDP_TRUSTED_PROXIES` is the ingress address only (`172.28.0.10/32` in the base compose file), so client-IP headers cannot be spoofed.
 - [ ] From outside the host, ports 5432, 6379, 8181, 8080, 9090 and the service ports 8000-8011 are closed.
 
 ## 5. Data protection
@@ -50,7 +53,8 @@ Work top to bottom on the release candidate. Every box needs a name and a date n
 
 - [ ] `bash scripts/run_tests.sh` is green, and the OPA tests pass.
 - [ ] `bash scripts/lint_dockerfiles.sh` passes.
-- [ ] CI is green on the release tag. (The CI rewrite, plan Task 16, is not done yet; until it lands, run the scripts above by hand.)
+- [ ] CI is green on the release commit: all 13 required checks pass (`gh pr checks`). `release.yml` refuses to publish unless CI is green for the tag's commit; it has not run on a tag yet, so do a dry run on a release candidate tag first.
+- [ ] A step-up replay check: the same TOTP code is rejected on a second challenge (covered by `services/django-app/tests/test_stepup_hardening.py`).
 
 ## 9. Sign-off
 

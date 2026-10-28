@@ -13,7 +13,14 @@ All notable changes to AZTDP. Entries for the production-readiness effort follow
 - Anomaly model artifacts are HMAC-verified before `joblib.load`; a corrupt signature or path now fails closed without raising (F-13).
 - `audit_events` is append-only, with `TRUNCATE` guarded on every partition (F-08).
 
+- Allowlisted paths are matched exactly (Django and Spring); `/metrics` is also blocked at the ingress. In DEBUG, `/ui` and its subtree are allowed on a segment boundary.
+- A TOTP code can be used once per user; a replay is rejected and counts toward the per-user lockout.
+- Django step-up keys and forensics' internal token are validated at startup; a step-up store outage returns 503.
+- Gateway telemetry no longer retries 4xx responses; `expires_at` on token revoke is range-checked.
+- Dependency advisories cleared: FastAPI/Starlette bumped per service, Django, PyJWT, requests, a jackson-bom pin for Spring, and frontend npm packages.
+
 ### Reliability and operations
+- CI: lint and bandit, per-service tests with coverage gates, OPA, Java, frontend, secret and dependency scanning, compose and exposure checks, and a compose integration run with ingress smoke tests. The release workflow is gated on green CI.
 - One migration path with per-service least-privilege database roles (F-14).
 - Containers run as non-root with health checks and digest-pinned base images; Prometheus scrapes the right Django port (F-12).
 - Audit telemetry retries, counts drops (`aztdp_telemetry_dropped_total`), and alerts on them; telemetry-ingest and forensics gained tests (F-08, F-18).
@@ -33,4 +40,4 @@ All notable changes to AZTDP. Entries for the production-readiness effort follow
 - Truthful readiness tracker, [known limitations](docs/KNOWN_LIMITATIONS.md) and [go-live checklist](docs/GO_LIVE_CHECKLIST.md); the overlapping root guides were merged into [docs/runbooks/QUICK_START_GUIDE.md](docs/runbooks/QUICK_START_GUIDE.md) (F-20).
 
 ### Not yet done
-CI/CD rewrite (plan Task 16), Kubernetes/Helm quarantine (Task 17) and the single SOC dashboard (Task 18).
+The release workflow has not run on a tag. Kubernetes/Helm quarantine (Task 17) and the single SOC dashboard (Task 18).
