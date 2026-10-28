@@ -4,7 +4,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` won't d
 
 The 2026-05-03 audit tracker (P0-P5) marked everything done. An analysis on 2026-10-19 found that several of those claims were false, and the work to fix them is in [the implementation plan](superpowers/plans/2026-10-19-aztdp-production-readiness.md) (Findings Register F-01 to F-20, Tasks 1-18). This file is the current, honest status. Related documents: [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md), [GO_LIVE_CHECKLIST.md](GO_LIVE_CHECKLIST.md), [PERFORMANCE_BASELINE.md](PERFORMANCE_BASELINE.md), [../CHANGELOG.md](../CHANGELOG.md).
 
-**Not ready for production yet.** Open blockers: both provisional SLOs are missed ([PERFORMANCE_BASELINE.md](PERFORMANCE_BASELINE.md)), the go-live checklist has not been executed, CI has not been rewritten (Task 16), and the owner decisions below are unanswered.
+**Not ready for production yet.** Open blockers: both provisional SLOs are missed ([PERFORMANCE_BASELINE.md](PERFORMANCE_BASELINE.md)), the go-live checklist has not been executed, the release workflow has never run on a tag, and the owner decisions below are unanswered.
 
 ## Plan progress
 
@@ -25,7 +25,7 @@ The 2026-05-03 audit tracker (P0-P5) marked everything done. An analysis on 2026
 | 13 | Backups and tested restore | F-15 | [x] |
 | 14 | Resource limits, restart policy, load-test baseline | F-12 | [x] SLOs not met |
 | 15 | Documentation truth pass | F-20, F-03 | [x] written; quickstart not yet run end-to-end on a clean clone |
-| 16 | CI/CD rewrite (tests, security gates, release) | F-16, F-19 | [ ] |
+| 16 | CI/CD rewrite (tests, security gates, release) | F-16, F-19 | [x] CI green on PR #2 and `main` is protected by its 13 checks; `release.yml` (GHCR, cosign, SBOM, image scan, CI gate) is written but has not run on a tag |
 | 17 | Quarantine Kubernetes/Helm | F-20 | [ ] |
 | 18 | One SOC dashboard wired to real data | F-17, F-03 | [ ] blocked on Q2 |
 
@@ -74,7 +74,7 @@ Items the 2026-10-19 analysis showed were falsely "done" were reopened, and are 
 - [x] P5.3 IP-spoof regression test
 - [x] P5.4 Step-up end-to-end test
 - [x] P5.5 Telemetry drain test
-- [ ] P5.6 CI runs OPA tests, frontend builds, SAST, dependency and image scanning, and a coverage gate (F-16, Task 16)
+- [x] P5.6 CI runs OPA tests, frontend builds, SAST (bandit), secret, dependency and filesystem scanning (gitleaks, pip-audit, npm audit, Trivy), per-service coverage gates and a compose integration run (F-16, Task 16). Image scanning happens in `release.yml`
 
 ## SOC 2 Type II evidence map
 
@@ -83,7 +83,7 @@ Items the 2026-10-19 analysis showed were falsely "done" were reopened, and are 
 | Audit log completeness | `audit_events` with retry/drop metric and `AuditTelemetryDropping` alert (Task 10); retention runbook [AUDIT_RETENTION.md](runbooks/AUDIT_RETENTION.md) |
 | Audit log immutability | Append-only `audit_events` and per-service DB roles (Task 8, `infra/postgres/04_roles.sql`, `05_grants.sql`) |
 | Access control | `X-Internal-Token` on every internal service incl. forensics (Task 3); OPA decisions; network exposure limited to ingress (`scripts/check_exposure.sh`, Task 4) |
-| Change management | Signed model artifacts and manual retrain endpoint (Tasks 11, P3.3); CI (Task 16, pending) |
+| Change management | Signed model artifacts and manual retrain endpoint (Tasks 11, P3.3); CI with required checks on `main` (Task 16); release workflow gated on green CI, with SBOM and cosign signing (not yet run on a tag) |
 | Encryption in transit | nginx TLS at ingress (P4.2). Replace the self-signed certificate (see go-live checklist) |
 | Monitoring and alerting | Prometheus rules and Alertmanager (Task 12), `scripts/check_prometheus.sh`, structured logs (P4.6) |
 | Backup and recovery | Automated backups, tested restore, [BACKUP_RESTORE.md](runbooks/BACKUP_RESTORE.md) (Task 13). Restore drill sign-off is a go-live item |
@@ -104,4 +104,5 @@ Items the 2026-10-19 analysis showed were falsely "done" were reopened, and are 
 - 2026-05-03: Implement full ML retraining loop in scope - owner
 - 2026-05-03: SOC 2 Type II in scope, no PCI/GDPR - owner
 - 2026-10-19: Production-readiness plan adopted; the 2026-05-03 "all done" status is superseded by this file
+- 2026-10-27: PR #2 merged: CI pipeline, allowlist exact-match fix, TOTP replay protection, fail-fast startup validation, dependency advisories cleared; `main` requires the 13 CI checks
 - 2026-10-20: Anomaly fallback made observable (counter, logs, alert) with fail-open behavior unchanged, pending Q4
