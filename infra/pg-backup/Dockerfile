@@ -1,7 +1,7 @@
 # pg-backup: pg_dump -Fc of every AZTDP database + pg_dumpall --globals-only on a
 # schedule. Built from the same postgres major/digest as the database so the dump
 # tools always match the server. Runs as the unprivileged postgres user (uid 70).
-FROM postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+FROM postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
 
 COPY --chmod=0555 backup.sh backup-loop.sh healthcheck.sh /
 # /backups is created here so the named volume mounted on it inherits postgres ownership.
