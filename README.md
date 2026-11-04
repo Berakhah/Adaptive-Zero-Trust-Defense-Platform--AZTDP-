@@ -184,4 +184,4 @@ See also [docs/SECURITY.md](docs/SECURITY.md) and [docs/architecture/ARCHITECTUR
 
 ## License
 
-This project is provided as a reference architecture. Adapt freely for your own use.
+Licensed under the Apache License 2.0. See [LICENSE](LICENSE).

@@ -36,3 +36,9 @@ dist/
 memories/
 # Committed dev-only defaults for docker-compose.dev.yml (no real secrets)
 !.env.dev
+
+# Local editor and agent tool state
+.claude/
+.kiro/
+.vscode/
+.lovable/
