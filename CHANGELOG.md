@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to AZTDP. Entries for the production-readiness effort follow the plan in [docs/superpowers/plans/2026-10-19-aztdp-production-readiness.md](docs/superpowers/plans/2026-10-19-aztdp-production-readiness.md); finding IDs (F-xx) refer to its Findings Register.
+All notable changes to AZTDP. Entries for the production-readiness effort follow the plan in [docs/process/plans/2026-10-19-aztdp-production-readiness.md](docs/process/plans/2026-10-19-aztdp-production-readiness.md); finding IDs (F-xx) refer to its Findings Register.
 
 ## [Unreleased] - production readiness (branch `feat/production-readiness`)
 
