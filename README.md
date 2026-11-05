@@ -1,6 +1,6 @@
 # AZTDP — Adaptive Zero-Trust Defense Platform
 
-Production-grade zero-trust security platform that enforces **per-request behavioral risk scoring** on top of valid JWTs. Every protected request is evaluated for IP drift, geo drift, device change, request rate anomalies, and ML-based anomaly detection **before** any business logic runs.
+Zero-trust reference platform that enforces **per-request behavioral risk scoring** on top of valid JWTs. Every protected request is evaluated for IP drift, geo drift, device change, request rate anomalies, and ML-based anomaly detection **before** any business logic runs.
 
 Built entirely with open-source tools.
 
