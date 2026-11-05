@@ -1,3 +1,6 @@
 # False positive: empty .env template in the plan doc (AZTDP_SECRET_KEY= with a
 # python one-liner in the comment). No secret value is present.
 f81c13e7bd6b7bee974cf0e794ecc3fd4c4b8c34:docs/superpowers/plans/2026-10-19-aztdp-production-readiness.md:generic-api-key:210
+
+# Same reviewed false positive, at its new path after the docs/process move.
+fb7537a8092244cb35a0cd547f23ad7343e69c1f:docs/process/plans/2026-10-19-aztdp-production-readiness.md:generic-api-key:210
