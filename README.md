@@ -138,15 +138,9 @@ locust -f scripts/load/locustfile.py --host http://localhost:8010 \
 
 ---
 
-## Deploying to Kubernetes
+## Kubernetes and Helm (not maintained)
 
-```bash
-kubectl apply -f infra/k8s/namespace.yaml
-kubectl apply -f infra/k8s/
-
-# Or via Helm
-helm install aztdp infra/helm/ -n aztdp --create-namespace
-```
+AZTDP targets Docker Compose only (decision of 2026-05-03). The manifests in `infra/k8s/` and `infra/helm/` are left over from an earlier plan, are not tested, and may not match the current services. Don't deploy them. See [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) and item 17 in [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md).
 
 ---
 
