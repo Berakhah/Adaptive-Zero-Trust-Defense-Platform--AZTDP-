@@ -18,6 +18,8 @@ const CFG = {
   EVENT_FETCH_LIMIT: 200,
   ANM_HISTORY: 24,
   HEALTH_TIMEOUT: 3500,
+  TELEMETRY_LIVE_WINDOW_MS: 60_000,
+  TELEMETRY_ACTIVE_WINDOW_MS: 5 * 60_000,
 };
 
 const SERVICES = [
@@ -42,6 +44,25 @@ const ROUTES = [
   { id: 'sessions', label: 'Sessions' },
   { id: 'forensics', label: 'Forensics' },
   { id: 'operations', label: 'Operations' },
+];
+
+const HIGHLIGHTS = [
+  {
+    title: 'Adaptive risk scoring',
+    detail: 'Scores every request for IP drift, geo drift, device change, and ML anomaly signals before policy enforcement.',
+  },
+  {
+    title: 'Policy-as-code enforcement',
+    detail: 'OPA-backed decisions deliver allow, deny, step-up MFA, or revoke outcomes with full audit traceability.',
+  },
+  {
+    title: 'Live forensics replay',
+    detail: 'Session timelines, incident reconstruction, and token revocation streams keep investigations actionable.',
+  },
+  {
+    title: 'Unified SOC observability',
+    detail: 'Prometheus + Grafana telemetry with the SOC console for real-time, executive-ready reporting.',
+  },
 ];
 
 const fetchWithTimeout = async (url, options = {}, timeoutMs = CFG.HEALTH_TIMEOUT) => {
@@ -82,6 +103,8 @@ const shortId = (id, n = 8) => {
   if (!id) return '--';
   return id.length > n ? `${id.slice(0, n)}...` : id;
 };
+
+const windowLabel = (ms) => `<${Math.round(ms / 60000)}m`;
 
 const riskColor = (score) => {
   if (score == null) return 'var(--muted)';
@@ -230,6 +253,48 @@ export default function App() {
     () => events.filter((ev) => ev.event_type === 'token_revocation').slice(0, 10),
     [events]
   );
+
+  const latestEventAt = useMemo(() => {
+    if (!events.length) return null;
+    return events.reduce((latest, ev) => {
+      if (!ev?.occurred_at) return latest;
+      if (!latest) return ev.occurred_at;
+      return new Date(ev.occurred_at) > new Date(latest) ? ev.occurred_at : latest;
+    }, null);
+  }, [events]);
+
+  const telemetryFreshness = useMemo(() => {
+    if (!latestEventAt) {
+      return { label: 'No telemetry', detail: 'Awaiting event ingest', tone: 'muted' };
+    }
+    const liveWindow = windowLabel(CFG.TELEMETRY_LIVE_WINDOW_MS);
+    const activeWindow = windowLabel(CFG.TELEMETRY_ACTIVE_WINDOW_MS);
+    const diff = Date.now() - new Date(latestEventAt).getTime();
+    if (diff < CFG.TELEMETRY_LIVE_WINDOW_MS) {
+      return { label: `Live (${liveWindow})`, detail: `Last event ${relTime(latestEventAt)}`, tone: 'good' };
+    }
+    if (diff < CFG.TELEMETRY_ACTIVE_WINDOW_MS) {
+      return { label: `Active (${activeWindow})`, detail: `Last event ${relTime(latestEventAt)}`, tone: 'warn' };
+    }
+    return { label: 'Delayed', detail: `Last event ${relTime(latestEventAt)}`, tone: 'alert' };
+  }, [latestEventAt]);
+
+  const healthSummary = useMemo(() => {
+    const counts = SERVICES.reduce(
+      (acc, svc) => {
+        const st = health[svc.key]?.status || 'unknown';
+        acc[st] = (acc[st] || 0) + 1;
+        return acc;
+      },
+      { ok: 0, degraded: 0, down: 0, unknown: 0 }
+    );
+    const total = SERVICES.length;
+    return {
+      ...counts,
+      total,
+      coverage: total ? Math.round((counts.ok / total) * 100) : 0,
+    };
+  }, [health]);
 
   const pollEvents = useCallback(async () => {
     try {
@@ -608,10 +673,7 @@ export default function App() {
     }
   };
 
-  const healthCount = useMemo(() => {
-    const ok = Object.values(health).filter((h) => h.status === 'ok').length;
-    return `${ok}/${SERVICES.length}`;
-  }, [health]);
+  const healthCount = useMemo(() => `${healthSummary.ok}/${healthSummary.total}`, [healthSummary]);
 
   return (
     <div className="app-shell">
@@ -627,7 +689,7 @@ export default function App() {
           <div className="brand-icon" />
           <div>
             <div className="brand-title">AZTDP</div>
-            <div className="brand-sub">Zero Trust SOC</div>
+            <div className="brand-sub">Adaptive Zero Trust SOC</div>
           </div>
         </div>
 
@@ -711,6 +773,40 @@ export default function App() {
                       style={{ width: `${Math.min(100, sessionsList.length * 5)}%` }}
                     />
                   </div>
+                </div>
+              </div>
+              <div className="grid grid-3">
+                <div className="card summary-card">
+                  <div className="summary-label">Threat posture</div>
+                  <div className="summary-value">
+                    <span className={`threat-badge ${threatLevel}`}>{threatLevel}</span>
+                  </div>
+                  <div className="summary-sub">Derived from anomaly rate, deny rate, and service health.</div>
+                </div>
+                <div className="card summary-card">
+                  <div className="summary-label">Service coverage</div>
+                  <div className="summary-metric">
+                    {healthSummary.ok}/{healthSummary.total}
+                  </div>
+                  <div className="summary-sub">
+                    {healthSummary.degraded} degraded • {healthSummary.down} down • {healthSummary.unknown} pending
+                  </div>
+                </div>
+                <div className="card summary-card">
+                  <div className="summary-label">Telemetry freshness</div>
+                  <div className={`summary-metric ${telemetryFreshness.tone}`}>{telemetryFreshness.label}</div>
+                  <div className="summary-sub">{telemetryFreshness.detail}</div>
+                </div>
+              </div>
+              <div className="card highlights-card">
+                <div className="chart-title">Platform highlights</div>
+                <div className="highlights-grid">
+                  {HIGHLIGHTS.map((item) => (
+                    <div key={item.title} className="highlight-item">
+                      <div className="highlight-title">{item.title}</div>
+                      <div className="highlight-sub">{item.detail}</div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </section>
