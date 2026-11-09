@@ -8,6 +8,8 @@ Built entirely with open-source tools.
 
 [![ci](https://github.com/Berakhah/aztdp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Berakhah/aztdp/actions/workflows/ci.yml) [![license](https://img.shields.io/github/license/Berakhah/aztdp)](LICENSE)
 
+**Status: not production-ready.** It runs as a Docker Compose stack with CI and tests; the anomaly service fails open and measured throughput misses the provisional SLOs ([details](#status-and-known-limitations)).
+
 ## How this was built
 
 A personal project. The dashboard in `sentinel-command-main/` started as a scaffold and UI generated with Lovable. The logic, security controls and tests built on top were written and reviewed by me, much of it with Claude Code. Counted on 7 Nov 2026: 52 of 60 commits carry a Claude or Copilot co-author trailer.
@@ -181,6 +183,10 @@ The ones to know first (full list in [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMI
 See also [docs/SECURITY.md](docs/SECURITY.md) and [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) § "Known gaps".
 
 ---
+
+## Security
+
+Report a vulnerability privately through GitHub; see [SECURITY.md](SECURITY.md). `.env.dev` is committed on purpose and holds dev-only values; SECURITY.md explains why.
 
 ## License
 
