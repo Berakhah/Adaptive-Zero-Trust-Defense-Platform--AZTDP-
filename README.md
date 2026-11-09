@@ -6,7 +6,7 @@ Built entirely with open-source tools.
 
 ---
 
-[![ci](https://github.com/Berakhah/Adaptive-Zero-Trust-Defense-Platform--AZTDP-/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Berakhah/Adaptive-Zero-Trust-Defense-Platform--AZTDP-/actions/workflows/ci.yml) [![license](https://img.shields.io/github/license/Berakhah/Adaptive-Zero-Trust-Defense-Platform--AZTDP-)](LICENSE)
+[![ci](https://github.com/Berakhah/aztdp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Berakhah/aztdp/actions/workflows/ci.yml) [![license](https://img.shields.io/github/license/Berakhah/aztdp)](LICENSE)
 
 ## How this was built
 
