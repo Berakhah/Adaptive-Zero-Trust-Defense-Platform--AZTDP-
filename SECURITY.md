@@ -7,7 +7,7 @@ themselves.
 ## Reporting a vulnerability
 
 Report it privately through GitHub
-([Security → Report a vulnerability](https://github.com/Berakhah/Adaptive-Zero-Trust-Defense-Platform--AZTDP-/security/advisories/new))
+([Security → Report a vulnerability](https://github.com/Berakhah/aztdp/security/advisories/new))
 with a description, steps to reproduce, and impact. Do not open a public issue for a suspected
 vulnerability. I aim to acknowledge within 5 business days.
 
