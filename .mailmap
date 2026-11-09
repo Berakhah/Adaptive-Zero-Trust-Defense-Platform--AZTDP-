@@ -1,0 +1,4 @@
+# Canonical identities for `git log` / `git shortlog` display only.
+# This does not rewrite history. See https://git-scm.com/docs/gitmailmap
+Bereket Tilahun <97037825+Berakhah@users.noreply.github.com>
+Bereket Tilahun <97037825+Berakhah@users.noreply.github.com> <Berakhah@users.noreply.github.com>

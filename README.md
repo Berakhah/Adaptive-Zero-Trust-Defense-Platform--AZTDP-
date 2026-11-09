@@ -6,6 +6,8 @@ Built entirely with open-source tools.
 
 ---
 
+[![ci](https://github.com/Berakhah/Adaptive-Zero-Trust-Defense-Platform--AZTDP-/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Berakhah/Adaptive-Zero-Trust-Defense-Platform--AZTDP-/actions/workflows/ci.yml) [![license](https://img.shields.io/github/license/Berakhah/Adaptive-Zero-Trust-Defense-Platform--AZTDP-)](LICENSE)
+
 ## How this was built
 
 A personal project. The dashboard in `sentinel-command-main/` started as a scaffold and UI generated with Lovable. The logic, security controls and tests built on top were written and reviewed by me, much of it with Claude Code. Counted on 7 Nov 2026: 52 of 60 commits carry a Claude or Copilot co-author trailer.
